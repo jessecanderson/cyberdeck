@@ -35,25 +35,37 @@ codex login
 codex --version
 ```
 
-The simplest Cyberdeck installation uses
-[pipx](https://pipx.pypa.io/stable/), which keeps the application isolated
-while exposing the `cyberdeck` command globally:
+The simplest supported installation uses the Cyberdeck Homebrew tap:
+
+```bash
+brew install jessecanderson/tap/cyberdeck
+cyberdeck --version
+```
+
+Upgrade or remove it with:
+
+```bash
+brew upgrade cyberdeck
+brew uninstall cyberdeck
+```
+
+Alternatively, [pipx](https://pipx.pypa.io/stable/) can install the latest
+source directly from GitHub while keeping the application isolated:
 
 ```bash
 pipx install git+https://github.com/jessecanderson/cyberdeck.git
 cyberdeck
 ```
 
-The first packaged release will make the shorter package-index installation
-available without a Git checkout:
+PyPI installation will become available after trusted publishing is configured:
 
 ```bash
 pipx install cyberdeck-tui
 cyberdeck --version
 ```
 
-Until that release is published, use the Git URL above. CI already validates
-the same wheel and source-distribution artifacts that will be published.
+Versioned wheel and source-distribution files are also attached to each
+[GitHub Release](https://github.com/jessecanderson/cyberdeck/releases).
 
 To install from a local clone instead:
 
