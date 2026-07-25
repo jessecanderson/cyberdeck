@@ -73,6 +73,9 @@ python -m pip install -e '.[dev]'
 pytest -q
 ```
 
+The CI suite verifies Python 3.11 through 3.14 and builds an installable wheel
+and source distribution on Python 3.14.
+
 To upgrade or remove a pipx installation:
 
 ```bash

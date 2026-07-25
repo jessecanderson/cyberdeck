@@ -91,7 +91,7 @@ async def test_shell_switches_modules_and_routes_journal_prompt(tmp_path: Path) 
         assert pilot.app.query_one("#agent-module").display is False
         assert pilot.app.query_one("#journal-editor").has_focus is True
         module_labels = [
-            str(item.query_one("Label").renderable)
+            str(item.query_one("Label").content)
             for item in pilot.app.query_one("#modules").children
         ]
         assert any("JOURNAL  ACTIVE" in label for label in module_labels)

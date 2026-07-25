@@ -40,8 +40,8 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#signal-trace") is not None
         assert pilot.app.query_one("#state-transition").display is False
         assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
-        assert "接続" in str(pilot.app.query_one("#sidebar-title").renderable)
-        assert "電脳端末" in str(pilot.app.query_one("#deck-brand").renderable)
+        assert "接続" in str(pilot.app.query_one("#sidebar-title").content)
+        assert "電脳端末" in str(pilot.app.query_one("#deck-brand").content)
 
 
 @pytest.mark.asyncio
@@ -52,7 +52,7 @@ async def test_local_help_command_does_not_require_agent() -> None:
         await pilot.press("enter")
         await pilot.pause()
         assert pilot.app.screen.__class__.__name__ == "HelpScreen"
-        assert "/new" in pilot.app.screen.query_one("#help-content").renderable
+        assert "/new" in str(pilot.app.screen.query_one("#help-content").content)
         await pilot.press("escape")
         await pilot.pause()
         assert pilot.app.screen.__class__.__name__ != "HelpScreen"
@@ -67,7 +67,7 @@ async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> No
         await pilot.app._run_local_command("/about")
         await pilot.pause()
         assert isinstance(pilot.app.screen, AboutScreen)
-        content = str(pilot.app.screen.query_one("#about-content").renderable)
+        content = pilot.app.screen.manifest
         assert f"Cyberdeck...... {__version__}" in content
         assert "Codex CLI...... codex 1.2.3" in content
         assert "No prompts, transcripts" in content
@@ -265,4 +265,4 @@ async def test_agent_events_show_real_state_transition_banner() -> None:
         pilot.app._agent_event(state, AgentEvent("status", "processing"))
         banner = pilot.app.query_one("#state-transition")
         assert banner.display is True
-        assert "SIGNAL ENGAGED // 稼働" in str(banner.renderable)
+        assert "SIGNAL ENGAGED // 稼働" in str(banner.content)

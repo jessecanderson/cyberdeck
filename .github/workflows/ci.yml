@@ -19,17 +19,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13", "3.14"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install project and test tools
         run: python -m pip install --upgrade pip && python -m pip install -e '.[dev]'
       - name: Lint
-        run: python -m ruff check src tests
+        run: python -m ruff check src tests scripts
+      - name: Test
+        run: python -m pytest -q
+
+  minimum-textual:
+    name: Textual 8.2 minimum
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install project at minimum Textual version
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[dev]'
+          python -m pip install 'textual==8.2.0'
       - name: Test
         run: python -m pytest -q
 
@@ -37,13 +54,13 @@ jobs:
     name: Build distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
       - name: Install packaging tools
-        run: python -m pip install --upgrade pip build twine
+        run: python -m pip install --upgrade pip 'build>=1.5,<2' 'twine>=6.2,<7'
       - name: Build wheel and source distribution
         run: python -m build
       - name: Validate package metadata
@@ -53,7 +70,7 @@ jobs:
           python -m venv /tmp/cyberdeck-wheel-test
           /tmp/cyberdeck-wheel-test/bin/python -m pip install dist/*.whl
           /tmp/cyberdeck-wheel-test/bin/cyberdeck --version
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cyberdeck-distributions
           path: dist/

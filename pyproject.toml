@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.31,<2"]
 build-backend = "hatchling.build"
 
 [project]
@@ -23,10 +23,11 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Topic :: Software Development :: User Interfaces",
 ]
 dependencies = [
-  "textual>=1.0",
+  "textual>=8.2,<9",
 ]
 
 [project.urls]
@@ -37,9 +38,9 @@ Releases = "https://github.com/jessecanderson/cyberdeck/releases"
 
 [project.optional-dependencies]
 dev = [
-  "pytest>=8",
-  "pytest-asyncio>=0.24",
-  "ruff>=0.9",
+  "pytest>=9.1,<10",
+  "pytest-asyncio>=1.4,<2",
+  "ruff>=0.16,<1",
 ]
 
 [project.scripts]

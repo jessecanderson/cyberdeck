@@ -1495,7 +1495,10 @@ class CyberdeckApp(App[None]):
         if self.manager.agents: view.index = ((view.index or 0) + direction) % len(self.manager.agents)
 
     def _active_agent(self) -> AgentState | None:
-        index = self.screen_stack[0].query_one("#agents", ListView).index
+        try:
+            index = self.screen_stack[0].query_one("#agents", ListView).index
+        except (IndexError, NoMatches):
+            return None
         return self.manager.agents[index] if index is not None and index < len(self.manager.agents) else None
 
     def _render_active(self, *, follow_end: bool = True) -> None:
