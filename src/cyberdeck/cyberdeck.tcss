@@ -1,0 +1,120 @@
+$void: #03050a;
+$surface: #070c14;
+$raised: #0a1220;
+$cyan: #00e8f2;
+$magenta: #e62acb;
+$green: #52e891;
+$amber: #e9b949;
+$red: #ff3b4f;
+$muted: #607087;
+
+Screen { background: $void; color: #cce7ed; }
+
+#top-rail {
+    height: 2; padding: 0 2; background: #07111b; color: $cyan;
+    border-bottom: solid #153244;
+}
+#deck-brand { width: auto; height: 1; color: $cyan; text-style: bold; }
+#uplink-count { width: auto; height: 1; margin-left: 8; color: $cyan; text-style: bold; }
+#deck-clock { width: 1fr; height: 1; color: $cyan; text-style: bold; content-align: right top; }
+#workspace { height: 1fr; }
+#sidebar { width: 31; min-width: 24; background: #060b12; border-right: solid #153244; }
+#sidebar-title { height: 3; padding: 1 2; color: $magenta; text-style: bold; }
+#agents { height: 1fr; background: transparent; }
+#agents > ListItem { height: 3; padding: 0 1; color: $muted; }
+#agents > ListItem.--highlight { background: #0d2632; color: $cyan; border-left: thick $magenta; }
+#spawn-hint { height: 2; padding: 0 2; color: $muted; border-top: solid #153244; content-align: left middle; }
+
+#main-panel { width: 1fr; min-width: 0; background: $void; }
+#agent-header {
+    height: 2; padding: 0 2; background: $surface; color: $cyan;
+    border-bottom: solid #153244;
+}
+#agent-primary { width: 100%; height: 1; }
+#agent-name, #agent-state { width: auto; height: 1; color: $cyan; text-style: bold; }
+#agent-state, #agent-model, #agent-activity { width: auto; height: 1; margin-left: 3; color: $cyan; }
+#agent-network { width: auto; height: 1; margin-left: 3; color: $green; text-style: bold; }
+#agent-mnem { width: auto; height: 1; margin-left: 3; color: $green; text-style: bold; }
+#agent-cwd { width: 1fr; height: 1; margin-left: 3; color: $cyan; content-align: right top; }
+#conversation { height: 1fr; padding: 1 2; scrollbar-color: $magenta; scrollbar-background: $surface; }
+TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 1; color: #cce7ed; }
+.load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
+
+#operations-console { height: 10; background: #050b11; border-top: solid #1a4052; }
+#operations-title { height: 2; padding: 0 2; color: $cyan; text-style: bold; content-align: left middle; }
+#operations-list { height: 1fr; background: transparent; }
+#operations-list > ListItem { height: 1; padding: 0 2; color: $muted; }
+#operations-list > ListItem.--highlight { background: #112631; color: #d7faff; }
+
+#autocomplete {
+    display: none;
+    height: auto;
+    max-height: 7;
+    padding: 0 2;
+    background: #050b12;
+    border-top: solid #153244;
+    color: $muted;
+}
+#prompt-bar { height: 3; padding: 1 2 0 2; background: #071019; border-top: solid #153244; }
+#prompt-prefix { width: auto; height: 1; color: $cyan; text-style: bold; content-align: left top; }
+#prompt { width: 1fr; height: 1; border: none; background: transparent; padding: 0 1; content-align: left top; }
+#prompt:focus { border: none; }
+#shortcut-rail { height: 2; padding: 0 2; background: #050910; color: $muted; content-align: right middle; }
+
+BootScreen {
+    layout: vertical;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    background: #02050a;
+}
+#boot-log {
+    width: 100%;
+    height: 1fr;
+    margin: 0;
+    padding: 0 2;
+    background: #02050a;
+    overflow: hidden hidden;
+}
+#boot-skip {
+    dock: bottom;
+    width: 100%; height: 2; margin: 0; padding: 0 1; color: $muted; background: #02050a;
+    border-top: solid #153244; content-align: right middle;
+}
+
+SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
+FirewallRequest { align: center middle; background: rgba(10, 0, 2, 0.92); }
+#spawn-dialog, #help-dialog, #restore-dialog {
+    width: 76; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
+}
+#spawn-dialog { height: 15; }
+#help-dialog { height: 32; }
+#restore-dialog { width: 100; height: 80%; border: double $magenta; }
+#spawn-title, #help-title, #restore-title { height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244; }
+#help-content { height: 1fr; padding: 1; }
+#restore-search, #restore-name { height: 3; margin-top: 1; border: tall #1a4052; background: #071019; }
+#restore-list { height: 1fr; margin: 1 0; background: #050a10; }
+#restore-list > ListItem { height: 3; padding: 0 1; color: $muted; }
+#restore-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
+#restore-help, .modal-help { height: 2; color: $muted; content-align: center middle; }
+#firewall-panel { width: 78; max-width: 94%; height: auto; max-height: 90%; background: #120307; }
+#operation-detail { width: 90%; height: 85%; padding: 2 3; background: #050b14; border: tall $cyan; }
+#confirm-dialog, #control-dialog, #switch-dialog, #dispatch-dialog {
+    width: 78; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
+}
+#confirm-dialog { height: 12; border: double $red; }
+#control-dialog { height: 27; }
+#switch-dialog { width: 96; height: 70%; border: double $magenta; }
+#dispatch-dialog { width: 96; height: 80%; border: double $magenta; }
+#confirm-title, #control-title, #switch-title, #dispatch-title {
+    height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244;
+}
+#confirm-message { height: 1fr; padding: 1; content-align: center middle; }
+#control-name, #switch-search, #dispatch-search, #dispatch-prompt { height: 3; margin-top: 1; border: tall #1a4052; background: #071019; }
+#control-list, #switch-list, #dispatch-list { height: 1fr; margin: 1 0; background: #050a10; }
+#control-list > ListItem { height: 2; padding: 0 1; }
+#switch-list > ListItem { height: 3; padding: 0 1; }
+#dispatch-list > ListItem { height: 2; padding: 0 1; }
+#control-list > ListItem.--highlight, #switch-list > ListItem.--highlight, #dispatch-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
+#dispatch-help { height: 2; color: $muted; content-align: center middle; }
