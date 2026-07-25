@@ -44,7 +44,16 @@ from .domain import (
 )
 from .journal import JournalStore
 from .manager import AgentManager
-from .modules import DeckCommand, DeckModule, ModuleInputMode, ModuleManifest
+from .module_registry import ModuleRegistry
+from .modules import (
+    DeckCommand,
+    DeckModule,
+    ModuleContext,
+    ModuleInputMode,
+    ModuleManifest,
+    ModuleStatus,
+    validate_manifest,
+)
 from .providers import AgentEvent
 from .themes import DeckTheme, discover_themes, import_theme
 
@@ -212,7 +221,9 @@ class HelpScreen(ModalScreen[None]):
 /pipe AGENT           Forward the latest agent response
 /copy [all|TEXT]      Copy response, transcript, or text
 /kill [AGENT|all]     Disconnect after confirmation
-/modules /module NAME List or switch deck modules
+/modules             List bundled and external deck modules
+/module NAME         Switch to an enabled deck module
+/module ACTION ARG   Install, link, update, enable, disable, or remove
 /theme [NAME]         Select a theme
 /theme import PATH    Validate and import a theme
 /journal [YYYY-MM-DD] Open a daily Markdown entry
@@ -756,7 +767,7 @@ class CyberdeckApp(App[None]):
         "/copy": "copy response, transcript, or text",
         "/kill": "disconnect an agent after confirmation",
         "/modules": "list installed deck modules",
-        "/module": "activate a deck module",
+        "/module": "activate or manage a deck module",
         "/theme": "select or import a color theme",
         "/journal": "open a dated journal entry",
         "/today": "open today's journal entry",
@@ -776,6 +787,7 @@ class CyberdeckApp(App[None]):
         manager: AgentManager | None = None,
         config_store: ConfigStore | None = None,
         journal_store: JournalStore | None = None,
+        module_registry: ModuleRegistry | None = None,
     ) -> None:
         super().__init__(); self.skip_boot = skip_boot
         self.manager = manager or AgentManager(self._agent_event)
@@ -784,6 +796,8 @@ class CyberdeckApp(App[None]):
         self.config_store = config_store or ConfigStore()
         self.deck_config: DeckConfig = self.config_store.load()
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
+        self.module_registry = module_registry or ModuleRegistry()
+        self.module_registry.apply_pending_updates()
         self.deck_themes, self._theme_errors = discover_themes()
         for deck_theme in self.deck_themes.values():
             self.register_theme(deck_theme.textual_theme())
@@ -810,7 +824,7 @@ class CyberdeckApp(App[None]):
         self._journal_loaded_text = ""
         self._journal_initialized = False
         self._journal_save_timer = None
-        self.deck_modules: dict[str, BuiltinModule] = {
+        self.deck_modules: dict[str, DeckModule] = {
             "agents": BuiltinModule(
                 ModuleManifest("agents", "AGENT COMMAND", "Multi-agent operations", 10),
                 lambda: AgentsWorkspace(id="agent-module"),
@@ -832,6 +846,17 @@ class CyberdeckApp(App[None]):
                 save_handler=self._save_journal_module,
             ),
         }
+        for module in self.deck_modules.values():
+            validate_manifest(module.manifest)
+        external_modules, self._module_errors = self.module_registry.discover_enabled(
+            self._module_context
+        )
+        for module_id, module in external_modules.items():
+            if module_id in self.deck_modules:
+                self._module_errors[module_id] = "Module id collides with a bundled module"
+                continue
+            self.deck_modules[module_id] = module
+        self.module_widgets: dict[str, Widget] = {}
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-rail"):
@@ -845,17 +870,21 @@ class CyberdeckApp(App[None]):
                 yield Label("── MODULES // 機能 ──", id="modules-title")
                 yield ListView(
                     *(
-                        ListItem(Label(self._module_label(module)))
-                        for module in sorted(
-                            self.deck_modules.values(), key=lambda item: item.manifest.order
-                        )
+                        ListItem(Label(self._module_label_id(module_id)))
+                        for module_id in self._ordered_module_ids()
                     ),
                     id="modules",
                 )
                 yield Static("^N NEW\n^P MATRIX", id="spawn-hint")
             with Vertical(id="main-panel"):
-                for module in sorted(self.deck_modules.values(), key=lambda item: item.manifest.order):
-                    yield module.build()
+                for module_id in self._ordered_enabled_module_ids():
+                    widget = self.deck_modules[module_id].build()
+                    expected_id = self._module_widget_id(module_id)
+                    if widget.id != expected_id:
+                        widget.id = expected_id
+                    widget.add_class("deck-module")
+                    self.module_widgets[module_id] = widget
+                    yield widget
                 yield Static(id="autocomplete")
                 with Vertical(id="prompt-zone"):
                     yield Static("▶ DECK:// 端末", id="prompt-label")
@@ -867,7 +896,8 @@ class CyberdeckApp(App[None]):
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
         self.query_one("#state-transition").display = False
-        self.query_one("#journal-module").display = False
+        for module_id, widget in self.module_widgets.items():
+            widget.display = module_id == "agents"
         self._update_rails(); self.set_interval(1, self._update_rails)
         self.set_interval(0.28, self._update_network)
         self.query_one("#prompt", Input).focus()
@@ -875,6 +905,8 @@ class CyberdeckApp(App[None]):
         self.call_after_refresh(lambda: self._activate_module(requested if requested in self.deck_modules else "agents"))
         for error in self._theme_errors:
             self.notify(error, title="THEME REJECTED", severity="warning")
+        for module_id, error in self._module_errors.items():
+            self.notify(error, title=f"MODULE FAULT // {module_id.upper()}", severity="error")
         if not self.skip_boot: self.push_screen(BootScreen())
 
     async def on_unmount(self) -> None:
@@ -1151,7 +1183,7 @@ class CyberdeckApp(App[None]):
         if value.startswith("/") and " " not in value:
             return [
                 (command, description)
-                for command, description in self.LOCAL_COMMANDS.items()
+                for command, description in self._all_local_commands().items()
                 if command.startswith(value) and command != value
             ]
         stripped = value.rstrip()
@@ -1222,8 +1254,15 @@ class CyberdeckApp(App[None]):
     def module_selected(self, event: ListView.Selected) -> None:
         if event.list_view.index is None:
             return
-        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
-        self._activate_module(ordered[event.list_view.index].manifest.id)
+        module_id = self._ordered_module_ids()[event.list_view.index]
+        record = self.module_registry.records.get(module_id)
+        if record and not record.enabled:
+            self.notify(f"{module_id} is disabled; use /module enable {module_id}", severity="warning")
+            return
+        if record and record.status == ModuleStatus.FAULTED.value:
+            self.notify(record.error or "Module failed to load", severity="error")
+            return
+        self._activate_module(module_id)
 
     @on(ListView.Selected, "#operations-list")
     def operation_selected(self, event: ListView.Selected) -> None:
@@ -1244,7 +1283,7 @@ class CyberdeckApp(App[None]):
     def action_previous_agent(self) -> None: self._move_agent(-1)
 
     def action_next_module(self) -> None:
-        ordered = sorted(self.deck_modules, key=lambda key: self.deck_modules[key].manifest.order)
+        ordered = self._ordered_enabled_module_ids()
         index = ordered.index(self.active_module_id)
         self._activate_module(ordered[(index + 1) % len(ordered)])
 
@@ -1281,23 +1320,23 @@ class CyberdeckApp(App[None]):
         if previous != module_id:
             await self.deck_modules[previous].deactivate()
         self.active_module_id = module_id
-        main.query_one("#agent-module").display = module_id == "agents"
-        main.query_one("#journal-module").display = module_id == "journal"
-        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
+        for candidate, widget in self.module_widgets.items():
+            widget.display = candidate == module_id
+        ordered = self._ordered_module_ids()
         main.query_one("#modules", ListView).index = next(
-            index for index, module in enumerate(ordered) if module.manifest.id == module_id
+            index for index, candidate in enumerate(ordered) if candidate == module_id
         )
         self._refresh_module_labels()
         prompt = main.query_one("#prompt", Input)
-        prompt.placeholder = (
-            "jack in... type a command or message"
-            if module_id == "agents"
-            else "quick journal entry... or /command"
-        )
-        if module_id == "journal":
+        if module_id == "agents":
+            prompt.placeholder = "jack in... type a command or message"
+            self._render_active()
+        elif module_id == "journal":
+            prompt.placeholder = "quick journal entry... or /command"
             main.query_one("#prompt-prefix", Static).update("local@journal:today $")
         else:
-            self._render_active()
+            prompt.placeholder = "module input... or /command"
+            main.query_one("#prompt-prefix", Static).update(f"local@{module_id}:~ $")
         await self.deck_modules[module_id].activate()
         self.deck_config.active_module = module_id
         if self._persist_preferences:
@@ -1309,18 +1348,64 @@ class CyberdeckApp(App[None]):
 
     def _refresh_module_labels(self) -> None:
         view = self.screen_stack[0].query_one("#modules", ListView)
-        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
-        for item, module in zip(view.children, ordered, strict=True):
-            item.query_one(Label).update(self._module_label(module))
+        ordered = self._ordered_module_ids()
+        for item, module_id in zip(view.children, ordered, strict=False):
+            item.query_one(Label).update(self._module_label_id(module_id))
 
     def _module_label(self, module: DeckModule) -> Text:
-        active = module.manifest.id == self.active_module_id
+        return self._module_label_id(module.manifest.id)
+
+    def _module_label_id(self, module_id: str) -> Text:
+        module = self.deck_modules.get(module_id)
+        record = self.module_registry.records.get(module_id)
+        active = module_id == self.active_module_id
+        title = module.manifest.title if module else module_id.upper()
+        description = module.manifest.description if module else (record.error or record.package)
+        status = (
+            "ACTIVE" if active else
+            "FAULT" if record and record.status == ModuleStatus.FAULTED.value else
+            "UPDATE" if record and record.pending_environment else
+            "DISABLED" if record and not record.enabled else
+            "STANDBY"
+        )
         label = Text()
         label.append("● " if active else "◇ ", style="bold #52e891" if active else "#607087")
-        label.append(module.manifest.title, style="bold #00e8f2" if active else "#8ba2b3")
-        label.append("  ACTIVE" if active else "  STANDBY", style="bold #52e891" if active else "#607087")
-        label.append(f"\n  {module.manifest.description}", style="#46566c")
+        label.append(title, style="bold #00e8f2" if active else "#8ba2b3")
+        label.append(f"  {status}", style="bold #52e891" if active else "#607087")
+        label.append(f"\n  {description}", style="#46566c")
         return label
+
+    @staticmethod
+    def _module_widget_id(module_id: str) -> str:
+        return "agent-module" if module_id == "agents" else f"{module_id}-module"
+
+    def _ordered_enabled_module_ids(self) -> list[str]:
+        return sorted(
+            self.deck_modules,
+            key=lambda key: (self.deck_modules[key].manifest.order, key),
+        )
+
+    def _ordered_module_ids(self) -> list[str]:
+        ids = set(self.deck_modules) | set(self.module_registry.records)
+        return sorted(
+            ids,
+            key=lambda key: (
+                self.deck_modules[key].manifest.order if key in self.deck_modules else 100,
+                key,
+            ),
+        )
+
+    def _module_context(self, module_id: str) -> ModuleContext:
+        return ModuleContext(
+            module_id=module_id,
+            data_directory=self.module_registry.root / "data" / module_id,
+            config_directory=self.module_registry.config_root / module_id,
+            notify=lambda message, title="MODULE", severity="information": self.notify(
+                message, title=title, severity=severity
+            ),
+            copy_to_clipboard=self.copy_to_clipboard,
+            services={},
+        )
 
     async def _activate_journal(self) -> None:
         main = self.screen_stack[0]
@@ -1550,13 +1635,36 @@ class CyberdeckApp(App[None]):
             self._write_local("\n".join(f"{i+1}. {a.config.name} [{a.status.value}] {a.config.working_directory}" for i, a in enumerate(self.manager.agents)) or "no uplinks connected")
         elif command == "/modules":
             rows = [
-                f"{'●' if module_id == self.active_module_id else '○'} {module_id:<10} {module.manifest.description}"
-                for module_id, module in self.deck_modules.items()
+                f"{'●' if module_id == self.active_module_id else '○'} "
+                f"{module_id:<12} {self._module_state(module_id):<14} "
+                f"{self._module_description(module_id)}"
+                for module_id in self._ordered_module_ids()
             ]
             self.notify("\n".join(rows), title="DECK MODULES")
         elif command == "/module":
             if not args:
                 self.notify(f"Active module: {self.active_module_id}", title="DECK MODULE")
+            elif args[0] in {"install", "link"}:
+                if len(args) < 2:
+                    self._write_local(f"usage: /module {args[0]} SPEC")
+                else:
+                    specification = args[1]
+                    editable = args[0] == "link"
+                    self.push_screen(
+                        ConfirmScreen(
+                            "TRUST EXTERNAL MODULE",
+                            f"Install and execute trusted Python code from:\n{specification}\n\n"
+                            "Modules run inside Cyberdeck and may access your user account.",
+                        ),
+                        lambda confirmed: self._install_external_module(
+                            specification, editable=editable
+                        ) if confirmed else None,
+                    )
+            elif args[0] in {"enable", "disable", "remove", "info", "update"}:
+                if len(args) != 2:
+                    self._write_local(f"usage: /module {args[0]} MODULE_ID")
+                else:
+                    self._module_management_command(args[0], args[1].casefold())
             elif args[0].casefold() not in self.deck_modules:
                 self.notify(f"Unknown module: {args[0]}", severity="error")
             else:
@@ -1588,10 +1696,179 @@ class CyberdeckApp(App[None]):
             elif command == "/rename" and not args: self._write_local("usage: /rename CALLSIGN")
             else: self._control_result(state, (command[1:], args[0] if args else None))
         elif command in {"/quit", "/exit"}: self.exit()
-        else: self._write_local(f"unknown local command: {command} (try /help)")
+        else:
+            handlers = {
+                deck_command.name: deck_command.handler
+                for module in self.deck_modules.values()
+                for deck_command in module.commands()
+            }
+            if command not in handlers:
+                self._write_local(f"unknown local command: {command} (try /help)")
+            else:
+                result = handlers[command](args)
+                if asyncio.iscoroutine(result):
+                    await result
+
+    def _all_local_commands(self) -> dict[str, str]:
+        commands = dict(self.LOCAL_COMMANDS)
+        for module in self.deck_modules.values():
+            for command in module.commands():
+                commands[command.name] = command.description
+        return commands
+
+    def _module_state(self, module_id: str) -> str:
+        if module_id == self.active_module_id:
+            return "active"
+        record = self.module_registry.records.get(module_id)
+        if record:
+            return record.status
+        return "bundled"
+
+    def _module_description(self, module_id: str) -> str:
+        module = self.deck_modules.get(module_id)
+        if module:
+            return module.manifest.description
+        record = self.module_registry.records[module_id]
+        return record.error or record.package
+
+    def _module_management_command(self, action: str, module_id: str) -> None:
+        if module_id not in self.module_registry.records:
+            self.notify(f"External module not found: {module_id}", severity="error")
+            return
+        if action == "info":
+            record = self.module_registry.records[module_id]
+            self.notify(
+                f"PACKAGE  {record.package}\nVERSION  {record.version}\n"
+                f"SOURCE   {record.source}\nSTATE    {record.status}\n"
+                f"ERROR    {record.error or '--'}",
+                title=f"MODULE // {module_id.upper()}",
+            )
+        elif action == "enable":
+            self.run_worker(self._enable_external_module(module_id), exclusive=False)
+        elif action == "disable":
+            self.run_worker(self._disable_external_module(module_id), exclusive=False)
+        elif action == "remove":
+            self.push_screen(
+                ConfirmScreen("REMOVE MODULE", f"Remove {module_id} and its environment?"),
+                lambda confirmed: self.run_worker(
+                    self._remove_external_module(module_id), exclusive=False
+                ) if confirmed else None,
+            )
+        elif action == "update":
+            record = self.module_registry.records[module_id]
+            self._install_external_module(record.source)
+
+    @work(exclusive=False)
+    async def _install_external_module(self, specification: str, *, editable: bool = False) -> None:
+        self.notify("Resolving package and dependencies", title="MODULE INSTALL")
+        record = None
+        try:
+            record, module = await asyncio.to_thread(
+                self.module_registry.install,
+                specification,
+                self._module_context,
+                editable=editable,
+                trusted=True,
+            )
+            if module:
+                await self._mount_external_module(module)
+                self.notify(
+                    f"{record.id} {record.version} mounted and ready",
+                    title="MODULE INSTALLED",
+                )
+            else:
+                self.notify(
+                    f"{record.id} update staged for next launch",
+                    title="UPDATE PENDING",
+                )
+            await self._sync_module_list()
+        except Exception as exc:  # noqa: BLE001
+            if record and record.id in self.module_registry.records and not record.pending_environment:
+                record.enabled = False
+                record.status = ModuleStatus.FAULTED.value
+                record.error = str(exc)
+                self.module_registry.save()
+                await self._sync_module_list()
+            self.notify(str(exc), title="MODULE INSTALL FAILED", severity="error")
+
+    async def _mount_external_module(self, module: DeckModule) -> None:
+        module_id = module.manifest.id
+        if module_id in self.deck_modules:
+            raise ValueError(f"Module id already loaded: {module_id}")
+        registered = {name for item in self.deck_modules.values() for name in (c.name for c in item.commands())}
+        registered.update(self.LOCAL_COMMANDS)
+        conflicts = sorted(command.name for command in module.commands() if command.name in registered)
+        if conflicts:
+            raise ValueError(f"Module command collision: {', '.join(conflicts)}")
+        widget = module.build()
+        widget.id = self._module_widget_id(module_id)
+        widget.add_class("deck-module")
+        widget.display = False
+        await self.screen_stack[0].query_one("#main-panel").mount(
+            widget, before=self.screen_stack[0].query_one("#autocomplete")
+        )
+        self.deck_modules[module_id] = module
+        self.module_widgets[module_id] = widget
+        await self._sync_module_list()
+        await self._switch_module(module_id)
+
+    async def _enable_external_module(self, module_id: str) -> None:
+        if module_id in self.deck_modules:
+            self.notify(f"{module_id} is already enabled")
+            return
+        try:
+            module = await asyncio.to_thread(
+                self.module_registry.load_record, module_id, self._module_context
+            )
+            await self._mount_external_module(module)
+            self.notify(f"{module_id} enabled", title="MODULE ONLINE")
+        except Exception as exc:  # noqa: BLE001
+            record = self.module_registry.records[module_id]
+            record.status = ModuleStatus.FAULTED.value
+            record.error = str(exc)
+            self.module_registry.save()
+            await self._sync_module_list()
+            self.notify(str(exc), title="MODULE FAULT", severity="error")
+
+    async def _disable_external_module(self, module_id: str) -> None:
+        if self.active_module_id == module_id:
+            await self._switch_module("agents")
+        module = self.deck_modules.pop(module_id, None)
+        widget = self.module_widgets.pop(module_id, None)
+        if module:
+            try:
+                await asyncio.wait_for(module.deactivate(), timeout=2)
+            except Exception as exc:  # noqa: BLE001
+                self.notify(str(exc), title="MODULE DEACTIVATION FAULT", severity="warning")
+        if widget:
+            await widget.remove()
+        self.module_registry.set_enabled(module_id, False)
+        await self._sync_module_list()
+        self.notify(f"{module_id} disabled", title="MODULE OFFLINE")
+
+    async def _remove_external_module(self, module_id: str) -> None:
+        if module_id in self.deck_modules:
+            await self._disable_external_module(module_id)
+        await asyncio.to_thread(self.module_registry.remove, module_id)
+        await self._sync_module_list()
+        self.notify(f"{module_id} removed", title="MODULE REMOVED")
+
+    async def _sync_module_list(self) -> None:
+        view = self.screen_stack[0].query_one("#modules", ListView)
+        selected = self.active_module_id
+        view.clear()
+        ordered = self._ordered_module_ids()
+        for module_id in ordered:
+            await view.append(ListItem(Label(self._module_label_id(module_id))))
+        if selected in ordered:
+            view.index = ordered.index(selected)
 
     def _system_manifest(self) -> str:
         codex_version = self._executable_version("codex")
+        external_records = list(self.module_registry.records.values())
+        faulted_modules = sum(
+            record.status == ModuleStatus.FAULTED.value for record in external_records
+        )
         rows = [
             "OPEN DECK SYSTEMS // SAFE DIAGNOSTIC EXPORT",
             "",
@@ -1604,11 +1881,13 @@ class CyberdeckApp(App[None]):
             f"Active module.. {self.active_module_id}",
             f"Active theme... {self.deck_config.active_theme}",
             f"Open agents.... {len(self.manager.agents)}",
+            f"Ext. modules... {len(external_records)} installed / {faulted_modules} faulted",
             f"Codex CLI...... {codex_version}",
             "",
             f"Config......... {self.display_path(self.config_store.path)}",
             f"Journal........ {self.display_path(self.journal_store.directory)}",
             f"Themes......... {self.display_path(user_theme_directory())}",
+            f"Modules........ {self.display_path(self.module_registry.root)}",
             "",
             "Repository..... https://github.com/jessecanderson/cyberdeck",
             "Issues......... https://github.com/jessecanderson/cyberdeck/issues",
@@ -1925,12 +2204,18 @@ class CyberdeckApp(App[None]):
 
 
 def main() -> None:
+    from .module_cli import configure_module_parser, run_module_command
+
     parser = argparse.ArgumentParser(
         prog="cyberdeck",
         description="Open Deck Systems terminal workspace for local AI agents",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.parse_args()
+    subparsers = parser.add_subparsers(dest="command")
+    configure_module_parser(subparsers)
+    args = parser.parse_args()
+    if args.command == "module":
+        raise SystemExit(run_module_command(args))
     CyberdeckApp().run()
 
 
