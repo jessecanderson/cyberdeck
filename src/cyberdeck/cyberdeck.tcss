@@ -1,34 +1,37 @@
-$void: #03050a;
-$surface: #070c14;
-$raised: #0a1220;
-$cyan: #00e8f2;
-$magenta: #e62acb;
-$green: #52e891;
-$amber: #e9b949;
-$red: #ff3b4f;
-$muted: #607087;
+$void: $background;
+$raised: $panel;
+$cyan: $primary;
+$magenta: $secondary;
+$green: $success;
+$amber: $warning;
+$red: $error;
 
-Screen { background: $void; color: #cce7ed; }
+Screen { background: $void; color: $foreground; }
 
 #top-rail {
-    height: 2; padding: 0 2; background: #07111b; color: $cyan;
-    border-bottom: solid #153244;
+    height: 2; padding: 0 2; background: $surface; color: $cyan;
+    border-bottom: solid $primary-muted;
 }
-#deck-brand { width: auto; height: 1; color: $cyan; text-style: bold; }
-#uplink-count { width: auto; height: 1; margin-left: 8; color: $cyan; text-style: bold; }
-#deck-clock { width: 1fr; height: 1; color: $cyan; text-style: bold; content-align: right top; }
+#deck-brand { width: auto; height: 1; color: $cyan; text-style: $deck-heading-style; }
+#uplink-count { width: auto; height: 1; margin-left: 8; color: $cyan; text-style: $deck-heading-style; }
+#deck-clock { width: 1fr; height: 1; color: $cyan; text-style: $deck-heading-style; content-align: right top; }
 #workspace { height: 1fr; }
-#sidebar { width: 34; min-width: 26; background: #04070d; border-right: solid #28303b; }
-#sidebar-title { width: 100%; height: 3; padding: 1 0; color: $cyan; text-style: bold; content-align: center middle; }
+#sidebar { width: 34; min-width: 26; background: $background; border-right: solid $surface-lighten-2; }
+#sidebar-title { width: 100%; height: 3; padding: 1 0; color: $cyan; text-style: $deck-heading-style; content-align: center middle; }
 #agents { height: 1fr; background: transparent; }
 #agents > ListItem { height: 3; padding: 0 2; color: $muted; }
-#agents > ListItem.--highlight { background: #07131d; color: $cyan; border-left: thick $cyan; }
-#spawn-hint { height: 3; padding: 0 2; color: $muted; border-top: solid #28303b; content-align: left middle; }
+#agents > ListItem.--highlight { background: $surface; color: $cyan; border-left: thick $cyan; }
+#modules-title { width: 100%; height: 2; color: $cyan; text-style: $deck-heading-style; content-align: center middle; border-top: solid $surface-lighten-2; }
+#modules { height: 7; background: transparent; }
+#modules > ListItem { height: 3; padding: 0 2; color: $muted; }
+#modules > ListItem.--highlight { background: $panel; color: $cyan; border-left: thick $magenta; }
+#spawn-hint { height: 3; padding: 0 2; color: $muted; border-top: solid $surface-lighten-2; content-align: left middle; }
 
 #main-panel { width: 1fr; min-width: 0; background: $void; }
+#agent-module, #journal-module { width: 100%; height: 1fr; }
 #agent-header {
-    height: 4; padding: 1 2 0 2; background: #050812; color: $cyan;
-    border-bottom: solid #6b145f;
+    height: 4; padding: 1 2 0 2; background: $surface; color: $cyan;
+    border-bottom: solid $secondary-muted;
 }
 #agent-primary { width: 100%; height: 1; }
 #signal-trace { width: 100%; height: 1; color: #1a8793; }
@@ -38,35 +41,51 @@ Screen { background: $void; color: #cce7ed; }
 #agent-mnem { width: auto; height: 1; margin-left: 3; color: $green; text-style: bold; }
 #agent-cwd { width: 1fr; height: 1; margin-left: 3; color: $cyan; content-align: right top; }
 #state-transition {
-    height: 1; margin: 0 1; padding: 0 1; background: #071019;
+    height: 1; margin: 0 1; padding: 0 1; background: $surface;
     color: $cyan; border-left: thick $magenta;
 }
-#conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid #151c30; scrollbar-color: $magenta; scrollbar-background: $surface; }
-TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: #cce7ed; }
+#conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid $panel-lighten-1; scrollbar-color: $magenta; scrollbar-background: $surface; }
+TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: $foreground; }
 .load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
 
-#operations-console { height: 10; background: #050b11; border-top: solid #1a4052; }
+#operations-console { height: 10; background: $surface; border-top: solid $primary-muted; }
 #operations-title { height: 2; padding: 0 2; color: $cyan; text-style: bold; content-align: left middle; }
 #operations-list { height: 1fr; background: transparent; }
 #operations-list > ListItem { height: 1; padding: 0 2; color: $muted; }
-#operations-list > ListItem.--highlight { background: #112631; color: #d7faff; }
+#operations-list > ListItem.--highlight { background: $primary-muted; color: $foreground; }
 
 #autocomplete {
     display: none;
     height: auto;
     max-height: 7;
     padding: 0 2;
-    background: #050b12;
-    border-top: solid #153244;
+    background: $surface;
+    border-top: solid $primary-muted;
     color: $muted;
 }
-#prompt-zone { height: 5; padding: 0 1; background: #03060b; }
+#prompt-zone { height: 5; padding: 0 1; background: $background; }
 #prompt-label { height: 1; color: $cyan; text-style: bold; }
-#prompt-bar { height: 3; padding: 0 1; background: #060b13; border: tall $cyan; }
+#prompt-bar { height: 3; padding: 0 1; background: $surface; border: tall $cyan; }
 #prompt-prefix { width: auto; height: 1; color: $cyan; text-style: bold; content-align: left top; }
 #prompt { width: 1fr; height: 1; border: none; background: transparent; padding: 0 1; content-align: left top; }
 #prompt:focus { border: none; }
-#shortcut-rail { height: 2; padding: 0 2; background: #050910; color: $muted; content-align: right middle; }
+#shortcut-rail { height: 2; padding: 0 2; background: $surface; color: $muted; content-align: right middle; }
+
+#journal-header { height: 4; padding: 1 2; background: $surface; border-bottom: solid $magenta; }
+#journal-title { width: auto; color: $cyan; text-style: $deck-heading-style; }
+#journal-status { width: 1fr; color: $muted; content-align: right top; }
+#journal-body { height: 1fr; margin: 0 1; border: solid $panel-lighten-1; }
+#journal-index { width: 30; min-width: 22; background: $background; border-right: solid $surface-lighten-2; }
+#journal-search { height: 3; border: tall $primary-muted; background: $surface; }
+#journal-search:focus { border: tall $cyan; }
+#journal-days { height: 1fr; background: transparent; }
+#journal-days > ListItem { height: 3; padding: 0 1; color: $muted; }
+#journal-days > ListItem.--highlight { background: $primary-muted; color: $cyan; border-left: thick $magenta; }
+#journal-document { width: 1fr; min-width: 0; }
+#journal-date { height: 2; padding: 0 2; color: $cyan; text-style: bold; border-bottom: solid $primary-muted; }
+#journal-editor { height: 1fr; border: none; background: $void; color: $foreground; }
+#journal-editor:focus { border: none; }
+#journal-help { height: 2; padding: 0 2; color: $muted; content-align: right middle; }
 
 BootScreen {
     layout: vertical;
@@ -90,7 +109,7 @@ BootScreen {
     border-top: solid #153244; content-align: right middle;
 }
 
-SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
+SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen, ThemeScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
 #spawn-dialog, #help-dialog, #restore-dialog {
     width: 76; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
@@ -114,6 +133,11 @@ SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, Operative
 #confirm-dialog, #control-dialog, #switch-dialog, #dispatch-dialog {
     width: 78; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
+#theme-dialog { width: 78; max-width: 94%; height: 65%; padding: 1 2; background: $surface; border: double $magenta; }
+#theme-title { height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244; }
+#theme-list { height: 1fr; margin: 1 0; background: #050a10; }
+#theme-list > ListItem { height: 3; padding: 0 1; color: $muted; }
+#theme-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #confirm-dialog { height: 12; border: double $red; }
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }

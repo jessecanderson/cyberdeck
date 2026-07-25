@@ -1,0 +1,21 @@
+schema_version = 1
+id = "afterglow"
+name = "Afterglow"
+author = "Open Deck Systems"
+
+[colors]
+primary = "#ffb000"
+secondary = "#ff5f5f"
+accent = "#ff5f5f"
+background = "#050200"
+surface = "#120900"
+panel = "#1b0e03"
+foreground = "#ffe9bf"
+muted = "#8f7651"
+success = "#80d080"
+warning = "#ffb000"
+error = "#ff4040"
+
+[styles]
+heading = "bold"
+muted = "dim"

@@ -5,11 +5,13 @@ import getpass
 import json
 import random
 import shlex
-from datetime import datetime
+from collections.abc import Awaitable, Callable
+from datetime import date, datetime
 from pathlib import Path
 from typing import ClassVar
 
 from rich import box
+from rich.cells import cell_len, chop_cells
 from rich.console import Group
 from rich.markdown import Markdown
 from rich.padding import Padding
@@ -22,8 +24,10 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
-from textual.widgets import Input, Label, ListItem, ListView, Static
+from textual.widget import Widget
+from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 
+from .config import ConfigStore, DeckConfig
 from .domain import (
     AgentState,
     AgentStatus,
@@ -32,8 +36,11 @@ from .domain import (
     ThreadSummary,
     TranscriptEntry,
 )
+from .journal import JournalStore
 from .manager import AgentManager
+from .modules import DeckCommand, DeckModule, ModuleInputMode, ModuleManifest
 from .providers import AgentEvent
+from .themes import DeckTheme, discover_themes, import_theme
 
 
 class BootScreen(Screen[None]):
@@ -154,9 +161,10 @@ class BootScreen(Screen[None]):
             else -1
         )
         for row_index, (line, style) in enumerate(rows):
-            clipped = line[:width]
+            chunks = chop_cells(line, width)
+            clipped = chunks[0] if chunks else ""
             frame.append(clipped, style=style)
-            remainder = width - len(clipped)
+            remainder = width - cell_len(clipped)
             cells = [" "] * remainder
             for _ in range(max(2, remainder // 58)):
                 if cells:
@@ -198,13 +206,19 @@ class HelpScreen(ModalScreen[None]):
 /pipe AGENT           Forward the latest agent response
 /copy [all|TEXT]      Copy response, transcript, or text
 /kill [AGENT|all]     Disconnect after confirmation
+/modules /module NAME List or switch deck modules
+/theme [NAME]         Select a theme
+/theme import PATH    Validate and import a theme
+/journal [YYYY-MM-DD] Open a daily Markdown entry
+/today  /save         Open today / save Journal
 /clear  /path        Clear view / show active path
 /help  /quit         Reference / shutdown
 
 KEYBOARD
 
 Ctrl+N new   Ctrl+R restore   Ctrl+G control   Ctrl+P switch
-Ctrl+B dispatch   Ctrl+O operations
+Ctrl+B dispatch   Ctrl+M next module   Ctrl+L command line
+Ctrl+S save editor   Ctrl+O operations
 Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit
 """
 
@@ -564,6 +578,122 @@ class OperationDetail(ModalScreen[None]):
     def action_close(self) -> None: self.dismiss(None)
 
 
+class ThemeScreen(ModalScreen[str | None]):
+    BINDINGS: ClassVar = [("escape", "close", "Close")]
+
+    def __init__(self, themes: list[DeckTheme], active: str) -> None:
+        super().__init__()
+        self.themes = themes
+        self.active = active
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="theme-dialog"):
+            yield Label("CHROMA MATRIX // 配色選択", id="theme-title")
+            yield ListView(
+                *(
+                    ListItem(Label(f"{'●' if theme.id == self.active else '○'}  {theme.name}\n    {theme.id} // {theme.author}"))
+                    for theme in self.themes
+                ),
+                id="theme-list",
+            )
+            yield Static("ENTER  APPLY     ESC  RETURN", classes="modal-help")
+
+    @on(ListView.Selected, "#theme-list")
+    def select_theme(self, event: ListView.Selected) -> None:
+        if event.list_view.index is not None:
+            self.dismiss(self.themes[event.list_view.index].id)
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class AgentsWorkspace(Vertical):
+    def compose(self) -> ComposeResult:
+        with Vertical(id="agent-header"):
+            with Horizontal(id="agent-primary"):
+                yield Static("NO ACTIVE UPLINK", id="agent-name")
+                yield Static(id="agent-model")
+                yield Static("│ STATE OFFLINE", id="agent-state")
+                yield Static("│ awaiting uplink", id="agent-activity")
+                yield Static("NET [····]", id="agent-network")
+                yield Static("MNEM [······] --", id="agent-mnem")
+                yield Static(id="agent-cwd")
+            yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
+        yield Static(id="state-transition")
+        yield VerticalScroll(id="conversation")
+        with Vertical(id="operations-console"):
+            yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
+            yield ListView(id="operations-list")
+
+
+class JournalWorkspace(Vertical):
+    def compose(self) -> ComposeResult:
+        with Horizontal(id="journal-header"):
+            yield Static("JOURNAL // 日誌", id="journal-title")
+            yield Static("LOCAL MARKDOWN // USER OWNED", id="journal-status")
+        with Horizontal(id="journal-body"):
+            with Vertical(id="journal-index"):
+                yield Input(placeholder="search entries...", id="journal-search")
+                yield ListView(id="journal-days")
+            with Vertical(id="journal-document"):
+                yield Static("TODAY", id="journal-date")
+                yield TextArea(
+                    "", language="markdown", soft_wrap=True, tab_behavior="indent",
+                    id="journal-editor",
+                )
+        yield Static(
+            "^L COMMAND   ESC RETURN TO EDITOR   ^S SAVE   UTF-8 // 日本語対応",
+            id="journal-help",
+        )
+
+
+class BuiltinModule(DeckModule):
+    def __init__(
+        self,
+        manifest: ModuleManifest,
+        factory: Callable[[], Widget],
+        prompt_handler: Callable[[str], Awaitable[None]],
+        commands: tuple[DeckCommand, ...] = (),
+        activate_handler: Callable[[], Awaitable[None]] | None = None,
+        deactivate_handler: Callable[[], Awaitable[None]] | None = None,
+        input_mode: ModuleInputMode = ModuleInputMode.DECK_PROMPT,
+        focus_target: str | None = None,
+        save_handler: Callable[[], Awaitable[bool] | bool] | None = None,
+    ) -> None:
+        self.manifest = manifest
+        self._factory = factory
+        self._prompt_handler = prompt_handler
+        self._commands = commands
+        self._activate_handler = activate_handler
+        self._deactivate_handler = deactivate_handler
+        self.input_mode = input_mode
+        self.focus_target = focus_target
+        self._save_handler = save_handler
+
+    def build(self) -> Widget:
+        return self._factory()
+
+    def commands(self) -> tuple[DeckCommand, ...]:
+        return self._commands
+
+    async def activate(self) -> None:
+        if self._activate_handler:
+            await self._activate_handler()
+
+    async def deactivate(self) -> None:
+        if self._deactivate_handler:
+            await self._deactivate_handler()
+
+    async def save(self) -> bool:
+        if not self._save_handler:
+            return False
+        result = self._save_handler()
+        return await result if asyncio.iscoroutine(result) else result
+
+    async def handle_prompt(self, text: str) -> None:
+        await self._prompt_handler(text)
+
+
 class CyberdeckApp(App[None]):
     CSS_PATH = "cyberdeck.tcss"
     TITLE = "CYBERDECK"
@@ -574,6 +704,10 @@ class CyberdeckApp(App[None]):
         Binding("ctrl+g", "agent_control", "Control", priority=True),
         Binding("ctrl+p", "agent_switcher", "Switch", priority=True),
         Binding("ctrl+b", "dispatch", "Dispatch", priority=True),
+        Binding("ctrl+m", "next_module", "Module", priority=True),
+        Binding("ctrl+l", "focus_command", "Command", priority=True),
+        Binding("ctrl+s", "save_module", "Save", priority=True),
+        Binding("escape", "workspace_focus", "Workspace", show=False),
         Binding("up", "prompt_previous", "History", show=False, priority=True),
         Binding("down", "prompt_next", "History", show=False, priority=True),
         Binding("tab", "complete_prompt", "Complete", show=False, priority=True),
@@ -593,6 +727,12 @@ class CyberdeckApp(App[None]):
         "/pipe": "forward the latest response to an agent",
         "/copy": "copy response, transcript, or text",
         "/kill": "disconnect an agent after confirmation",
+        "/modules": "list installed deck modules",
+        "/module": "activate a deck module",
+        "/theme": "select or import a color theme",
+        "/journal": "open a dated journal entry",
+        "/today": "open today's journal entry",
+        "/save": "save the active journal entry",
         "/older": "load 50 older turns",
         "/clear": "clear the active transcript",
         "/path": "show the active working directory",
@@ -600,10 +740,32 @@ class CyberdeckApp(App[None]):
         "/quit": "shut down Cyberdeck",
     }
 
-    def __init__(self, *, skip_boot: bool = False, manager: AgentManager | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        skip_boot: bool = False,
+        manager: AgentManager | None = None,
+        config_store: ConfigStore | None = None,
+        journal_store: JournalStore | None = None,
+    ) -> None:
         super().__init__(); self.skip_boot = skip_boot
         self.manager = manager or AgentManager(self._agent_event)
         self.manager._on_event = self._agent_event
+        self._persist_preferences = not skip_boot or config_store is not None
+        self.config_store = config_store or ConfigStore()
+        self.deck_config: DeckConfig = self.config_store.load()
+        self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
+        self.deck_themes, self._theme_errors = discover_themes()
+        for deck_theme in self.deck_themes.values():
+            self.register_theme(deck_theme.textual_theme())
+        selected_theme = self.deck_config.active_theme
+        if selected_theme not in self.deck_themes:
+            self._theme_errors.append(
+                f"Configured theme '{selected_theme}' is unavailable; using ODS Nightwave"
+            )
+            selected_theme = "ods"
+            self.deck_config.active_theme = selected_theme
+        self.theme = selected_theme
         self._system_transcript: list[TranscriptEntry] = []
         self._prompt_completions: list[tuple[str, str]] = []
         self._network_phase = 0
@@ -612,6 +774,35 @@ class CyberdeckApp(App[None]):
         self._history_draft = ""
         self._draft_agent_id: str | None = None
         self._transition_serial = 0
+        self.active_module_id = "agents"
+        self._journal_day = datetime.now().astimezone().date()
+        self._journal_loading = False
+        self._journal_dirty = False
+        self._journal_loaded_text = ""
+        self._journal_initialized = False
+        self._journal_save_timer = None
+        self.deck_modules: dict[str, BuiltinModule] = {
+            "agents": BuiltinModule(
+                ModuleManifest("agents", "AGENT COMMAND", "Multi-agent operations", 10),
+                lambda: AgentsWorkspace(id="agent-module"),
+                self._handle_agent_prompt,
+            ),
+            "journal": BuiltinModule(
+                ModuleManifest("journal", "JOURNAL", "Daily Markdown log", 20),
+                lambda: JournalWorkspace(id="journal-module"),
+                self._handle_journal_prompt,
+                commands=(
+                    DeckCommand("/journal", "open a dated journal entry", self._command_journal),
+                    DeckCommand("/today", "open today's journal entry", self._command_today),
+                    DeckCommand("/save", "save the active journal entry", self._command_save),
+                ),
+                activate_handler=self._activate_journal,
+                deactivate_handler=self._deactivate_journal,
+                input_mode=ModuleInputMode.WORKSPACE_EDITOR,
+                focus_target="#journal-editor",
+                save_handler=self._save_journal_module,
+            ),
+        }
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-rail"):
@@ -622,40 +813,68 @@ class CyberdeckApp(App[None]):
             with Vertical(id="sidebar"):
                 yield Label("── AGENTS // 接続 ──", id="sidebar-title")
                 yield ListView(id="agents")
+                yield Label("── MODULES // 機能 ──", id="modules-title")
+                yield ListView(
+                    *(
+                        ListItem(Label(self._module_label(module)))
+                        for module in sorted(
+                            self.deck_modules.values(), key=lambda item: item.manifest.order
+                        )
+                    ),
+                    id="modules",
+                )
                 yield Static("^N NEW\n^P MATRIX", id="spawn-hint")
             with Vertical(id="main-panel"):
-                with Vertical(id="agent-header"):
-                    with Horizontal(id="agent-primary"):
-                        yield Static("NO ACTIVE UPLINK", id="agent-name")
-                        yield Static(id="agent-model")
-                        yield Static("│ STATE OFFLINE", id="agent-state")
-                        yield Static("│ awaiting uplink", id="agent-activity")
-                        yield Static("NET [····]", id="agent-network")
-                        yield Static("MNEM [······] --", id="agent-mnem")
-                        yield Static(id="agent-cwd")
-                    yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
-                yield Static(id="state-transition")
-                yield VerticalScroll(id="conversation")
-                with Vertical(id="operations-console"):
-                    yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
-                    yield ListView(id="operations-list")
+                for module in sorted(self.deck_modules.values(), key=lambda item: item.manifest.order):
+                    yield module.build()
                 yield Static(id="autocomplete")
                 with Vertical(id="prompt-zone"):
                     yield Static("▶ DECK:// 端末", id="prompt-label")
                     with Horizontal(id="prompt-bar"):
                         yield Static("local@deck:~ $", id="prompt-prefix")
                         yield Input(placeholder="jack in... type a command or message", id="prompt")
-        yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^O OPS  ^Q QUIT", id="shortcut-rail")
+        yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^M MODULE  ^L CMD  ^S SAVE  ^O OPS  ^Q QUIT", id="shortcut-rail")
 
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
         self.query_one("#state-transition").display = False
+        self.query_one("#journal-module").display = False
         self._update_rails(); self.set_interval(1, self._update_rails)
         self.set_interval(0.28, self._update_network)
         self.query_one("#prompt", Input).focus()
+        requested = self.deck_config.active_module if self._persist_preferences else "agents"
+        self.call_after_refresh(lambda: self._activate_module(requested if requested in self.deck_modules else "agents"))
+        for error in self._theme_errors:
+            self.notify(error, title="THEME REJECTED", severity="warning")
         if not self.skip_boot: self.push_screen(BootScreen())
 
-    async def on_unmount(self) -> None: await self.manager.shutdown()
+    async def on_unmount(self) -> None:
+        if self._journal_dirty:
+            self._save_journal()
+        await self.manager.shutdown()
+
+    def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
+        if not self.screen_stack:
+            return super().check_action(action, parameters)
+        main = self.screen_stack[0]
+        if self.screen is main and action in {
+            "prompt_previous",
+            "prompt_next",
+            "complete_prompt",
+        }:
+            return main.query_one("#prompt", Input).has_focus
+        if action == "focus_command":
+            return self.screen is main
+        if action == "workspace_focus":
+            return (
+                self.screen is main
+                and self.deck_modules[self.active_module_id].input_mode
+                is ModuleInputMode.WORKSPACE_EDITOR
+                and main.query_one("#prompt", Input).has_focus
+            )
+        if action == "save_module":
+            return self.screen is main
+        return super().check_action(action, parameters)
 
     def _update_rails(self) -> None:
         active = sum(
@@ -832,15 +1051,32 @@ class CyberdeckApp(App[None]):
         state_for_draft = self._active_agent()
         if state_for_draft: state_for_draft.prompt_draft = ""
         if prompt.startswith("/"): await self._run_local_command(prompt); return
+        await self.deck_modules[self.active_module_id].handle_prompt(prompt)
+
+    async def _handle_agent_prompt(self, prompt: str) -> None:
         state = self._active_agent()
         if not state: self._write_local("No active uplink. Use /new or /restore."); return
         if state.status is not AgentStatus.READY:
             self._write_local(f"{state.config.name} is {state.status.value.upper()}; wait for READY"); return
-        # Manager timestamps once and owns the durable entry.
         try: await self.manager.send(state, prompt)
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"transmission failed: {exc}")
         self._refresh_all()
+
+    async def _handle_journal_prompt(self, prompt: str) -> None:
+        try:
+            updated = self.journal_store.append_quick_entry(self._journal_day, prompt)
+        except OSError as exc:
+            self.notify(str(exc), title="JOURNAL WRITE FAILED", severity="error")
+            return
+        self._journal_loading = True
+        self.screen_stack[0].query_one("#journal-editor", TextArea).load_text(updated)
+        self._journal_loading = False
+        self._journal_dirty = False
+        self._journal_loaded_text = updated
+        query = self.screen_stack[0].query_one("#journal-search", Input).value
+        self._refresh_journal_days(query)
+        self.notify("Quick entry recorded", title="JOURNAL")
 
     @on(Input.Changed, "#prompt")
     def prompt_changed(self, event: Input.Changed) -> None:
@@ -888,6 +1124,20 @@ class CyberdeckApp(App[None]):
             ]
         stripped = value.rstrip()
         words = stripped.split()
+        if words and words[0] == "/module" and len(words) == 2 and not value.endswith(" "):
+            prefix = words[1].casefold()
+            return [
+                (module_id, module.manifest.description)
+                for module_id, module in self.deck_modules.items()
+                if module_id.startswith(prefix)
+            ]
+        if words and words[0] == "/theme" and len(words) == 2 and not value.endswith(" "):
+            prefix = words[1].casefold()
+            return [
+                (theme_id, theme.name)
+                for theme_id, theme in self.deck_themes.items()
+                if theme_id.startswith(prefix)
+            ]
         if words and words[0] in {"/send", "/pipe", "/kill"} and len(words) == 2:
             if value.endswith(" "):
                 return []
@@ -923,6 +1173,8 @@ class CyberdeckApp(App[None]):
 
     @on(ListView.Highlighted, "#agents")
     def selected_agent_changed(self) -> None:
+        if self.is_mounted and self.active_module_id != "agents":
+            self._activate_module("agents")
         state = self._active_agent()
         if state: state.unread_count = 0
         prompt = self.screen_stack[0].query_one("#prompt", Input)
@@ -934,6 +1186,13 @@ class CyberdeckApp(App[None]):
         self._history_index = None
         self._render_active()
 
+    @on(ListView.Selected, "#modules")
+    def module_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.index is None:
+            return
+        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
+        self._activate_module(ordered[event.list_view.index].manifest.id)
+
     @on(ListView.Selected, "#operations-list")
     def operation_selected(self, event: ListView.Selected) -> None:
         state = self._active_agent()
@@ -941,6 +1200,9 @@ class CyberdeckApp(App[None]):
             self.push_screen(OperationDetail(state.operations[event.list_view.index]))
 
     def action_operations(self) -> None:
+        if self.active_module_id != "agents":
+            self.notify("Operations are available in AGENT COMMAND", severity="warning")
+            return
         console = self.query_one("#operations-console")
         console.display = not console.display
         if console.display: self.query_one("#operations-list", ListView).focus()
@@ -948,6 +1210,184 @@ class CyberdeckApp(App[None]):
 
     def action_next_agent(self) -> None: self._move_agent(1)
     def action_previous_agent(self) -> None: self._move_agent(-1)
+
+    def action_next_module(self) -> None:
+        ordered = sorted(self.deck_modules, key=lambda key: self.deck_modules[key].manifest.order)
+        index = ordered.index(self.active_module_id)
+        self._activate_module(ordered[(index + 1) % len(ordered)])
+
+    def action_focus_command(self) -> None:
+        self.screen_stack[0].query_one("#prompt", Input).focus()
+
+    def action_workspace_focus(self) -> None:
+        self.call_after_refresh(self._focus_active_workspace)
+
+    def action_save_module(self) -> None:
+        self.run_worker(self._save_active_module(), group="module-save", exclusive=True)
+
+    async def _save_active_module(self) -> None:
+        handled = await self.deck_modules[self.active_module_id].save()
+        if not handled:
+            self.notify(f"{self.active_module_id} has nothing to save", severity="warning")
+
+    def _focus_active_workspace(self) -> None:
+        module = self.deck_modules[self.active_module_id]
+        if module.input_mode is ModuleInputMode.DECK_PROMPT:
+            self.screen_stack[0].query_one("#prompt", Input).focus()
+        elif module.focus_target:
+            self.screen_stack[0].query_one(module.focus_target).focus()
+
+    def _activate_module(self, module_id: str) -> None:
+        if module_id not in self.deck_modules:
+            self.notify(f"Unknown module: {module_id}", severity="error")
+            return
+        self.run_worker(self._switch_module(module_id), group="module-switch", exclusive=True)
+
+    async def _switch_module(self, module_id: str) -> None:
+        main = self.screen_stack[0]
+        previous = self.active_module_id
+        if previous != module_id:
+            await self.deck_modules[previous].deactivate()
+        self.active_module_id = module_id
+        main.query_one("#agent-module").display = module_id == "agents"
+        main.query_one("#journal-module").display = module_id == "journal"
+        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
+        main.query_one("#modules", ListView).index = next(
+            index for index, module in enumerate(ordered) if module.manifest.id == module_id
+        )
+        self._refresh_module_labels()
+        prompt = main.query_one("#prompt", Input)
+        prompt.placeholder = (
+            "jack in... type a command or message"
+            if module_id == "agents"
+            else "quick journal entry... or /command"
+        )
+        if module_id == "journal":
+            main.query_one("#prompt-prefix", Static).update("local@journal:today $")
+        else:
+            self._render_active()
+        await self.deck_modules[module_id].activate()
+        self.deck_config.active_module = module_id
+        if self._persist_preferences:
+            try:
+                self.config_store.save(self.deck_config)
+            except OSError as exc:
+                self.notify(str(exc), title="CONFIG WRITE FAILED", severity="warning")
+        self._focus_active_workspace()
+
+    def _refresh_module_labels(self) -> None:
+        view = self.screen_stack[0].query_one("#modules", ListView)
+        ordered = sorted(self.deck_modules.values(), key=lambda item: item.manifest.order)
+        for item, module in zip(view.children, ordered, strict=True):
+            item.query_one(Label).update(self._module_label(module))
+
+    def _module_label(self, module: DeckModule) -> Text:
+        active = module.manifest.id == self.active_module_id
+        label = Text()
+        label.append("● " if active else "◇ ", style="bold #52e891" if active else "#607087")
+        label.append(module.manifest.title, style="bold #00e8f2" if active else "#8ba2b3")
+        label.append("  ACTIVE" if active else "  STANDBY", style="bold #52e891" if active else "#607087")
+        label.append(f"\n  {module.manifest.description}", style="#46566c")
+        return label
+
+    async def _activate_journal(self) -> None:
+        main = self.screen_stack[0]
+        query = main.query_one("#journal-search", Input).value
+        self._refresh_journal_days(query)
+        if not self._journal_initialized:
+            self._load_journal_day(self._journal_day)
+
+    async def _deactivate_journal(self) -> None:
+        if self._journal_dirty:
+            self._save_journal()
+
+    def _refresh_journal_days(self, query: str = "") -> None:
+        days = self.journal_store.days(query)
+        today = datetime.now().astimezone().date()
+        if not query and today not in days:
+            days.insert(0, today)
+        self._journal_dates = days
+        view = self.screen_stack[0].query_one("#journal-days", ListView)
+        view.clear()
+        for day in days:
+            marker = "●" if day == self._journal_day else "○"
+            view.append(ListItem(Label(f"{marker} {day.isoformat()}\n  {day:%A}")))
+        if days:
+            try:
+                view.index = days.index(self._journal_day)
+            except ValueError:
+                view.index = 0
+
+    def _load_journal_day(self, day: date) -> None:
+        if self._journal_dirty:
+            self._save_journal()
+        self._journal_day = day
+        try:
+            content = self.journal_store.read(day)
+        except OSError as exc:
+            self.notify(str(exc), title="JOURNAL READ FAILED", severity="error")
+            return
+        self._journal_loading = True
+        main = self.screen_stack[0]
+        main.query_one("#journal-editor", TextArea).load_text(content)
+        self._journal_loading = False
+        self._journal_dirty = False
+        self._journal_loaded_text = content
+        self._journal_initialized = True
+        main.query_one("#journal-date", Static).update(
+            f"{day:%A, %B} {day.day}, {day.year} // {day.isoformat()}"
+        )
+        if self.active_module_id == "journal":
+            main.query_one("#prompt-prefix", Static).update(f"local@journal:{day.isoformat()} $")
+
+    def _save_journal(self) -> bool:
+        if not self._journal_dirty:
+            return True
+        main = self.screen_stack[0]
+        text = main.query_one("#journal-editor", TextArea).text
+        try:
+            self.journal_store.write(self._journal_day, text)
+        except OSError as exc:
+            self.notify(str(exc), title="JOURNAL WRITE FAILED", severity="error")
+            return False
+        self._journal_dirty = False
+        self._journal_loaded_text = text
+        main.query_one("#journal-status", Static).update("SAVED // USER OWNED MARKDOWN")
+        query = main.query_one("#journal-search", Input).value
+        self._refresh_journal_days(query)
+        return True
+
+    async def _save_journal_module(self) -> bool:
+        saved = self._save_journal()
+        if saved:
+            self.notify("Entry saved", title="JOURNAL")
+        return saved
+
+    @on(TextArea.Changed, "#journal-editor")
+    def journal_changed(self) -> None:
+        editor = self.screen_stack[0].query_one("#journal-editor", TextArea)
+        if self._journal_loading or editor.text == self._journal_loaded_text:
+            return
+        self._journal_dirty = True
+        self.screen_stack[0].query_one("#journal-status", Static).update("MODIFIED // AUTOSAVE ARMED")
+        if self._journal_save_timer is not None:
+            self._journal_save_timer.stop()
+        self._journal_save_timer = self.set_timer(0.7, self._save_journal)
+
+    @on(Input.Changed, "#journal-search")
+    def journal_search_changed(self, event: Input.Changed) -> None:
+        self._refresh_journal_days(event.value)
+
+    @on(ListView.Highlighted, "#journal-days")
+    def journal_day_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.index is not None and event.list_view.index < len(self._journal_dates):
+            day = self._journal_dates[event.list_view.index]
+            if day != self._journal_day:
+                self._load_journal_day(day)
+
+    @on(ListView.Selected, "#journal-days")
+    def journal_day_selected(self) -> None:
+        self.screen_stack[0].query_one("#journal-editor", TextArea).focus()
 
     def action_prompt_previous(self) -> None:
         if self.screen is not self.screen_stack[0]: return
@@ -1072,6 +1512,29 @@ class CyberdeckApp(App[None]):
                 else: self._write_local(f"path not found: {path}")
         elif command == "/agents":
             self._write_local("\n".join(f"{i+1}. {a.config.name} [{a.status.value}] {a.config.working_directory}" for i, a in enumerate(self.manager.agents)) or "no uplinks connected")
+        elif command == "/modules":
+            rows = [
+                f"{'●' if module_id == self.active_module_id else '○'} {module_id:<10} {module.manifest.description}"
+                for module_id, module in self.deck_modules.items()
+            ]
+            self.notify("\n".join(rows), title="DECK MODULES")
+        elif command == "/module":
+            if not args:
+                self.notify(f"Active module: {self.active_module_id}", title="DECK MODULE")
+            elif args[0].casefold() not in self.deck_modules:
+                self.notify(f"Unknown module: {args[0]}", severity="error")
+            else:
+                self._activate_module(args[0].casefold())
+        elif command == "/theme":
+            self._theme_command(args)
+        elif command in {"/journal", "/today", "/save"}:
+            handlers = {
+                deck_command.name: deck_command.handler
+                for deck_command in self.deck_modules["journal"].commands()
+            }
+            result = handlers[command](args)
+            if asyncio.iscoroutine(result):
+                await result
         elif command == "/older":
             state = self._active_agent()
             if state: self._load_older(state)
@@ -1090,6 +1553,89 @@ class CyberdeckApp(App[None]):
             else: self._control_result(state, (command[1:], args[0] if args else None))
         elif command in {"/quit", "/exit"}: self.exit()
         else: self._write_local(f"unknown local command: {command} (try /help)")
+
+    async def _command_journal(self, args: list[str]) -> None:
+        day = datetime.now().astimezone().date()
+        if args:
+            try:
+                day = date.fromisoformat(args[0])
+            except ValueError:
+                self.notify("usage: /journal [YYYY-MM-DD]", severity="error")
+                return
+        self._journal_day = day
+        self._activate_module("journal")
+        self._load_journal_day(day)
+
+    async def _command_today(self, _args: list[str]) -> None:
+        await self._command_journal([])
+
+    async def _command_save(self, _args: list[str]) -> None:
+        if self.active_module_id != "journal":
+            self.notify("Journal is not active", severity="warning")
+            return
+        await self._save_journal_module()
+
+    def _theme_command(self, args: list[str]) -> None:
+        if not args:
+            self.push_screen(
+                ThemeScreen(list(self.deck_themes.values()), self.deck_config.active_theme),
+                self._theme_selected,
+            )
+            return
+        if args[0].casefold() == "import":
+            if len(args) != 2:
+                self.notify("usage: /theme import PATH", severity="error")
+                return
+            try:
+                source = Path(args[1]).expanduser().resolve()
+            except (RuntimeError, OSError, ValueError) as exc:
+                self.notify(str(exc), title="THEME IMPORT FAILED", severity="error")
+                return
+            try:
+                deck_theme = import_theme(source)
+            except FileExistsError:
+                self.push_screen(
+                    ConfirmScreen("REPLACE THEME", f"Replace imported theme {source.name}?"),
+                    lambda yes: self._replace_theme(source) if yes else None,
+                )
+                return
+            except ValueError as exc:
+                self.notify(str(exc), title="THEME REJECTED", severity="error")
+                return
+            self._register_imported_theme(deck_theme)
+            return
+        self._apply_theme(args[0].casefold())
+
+    def _replace_theme(self, source: Path) -> None:
+        try:
+            deck_theme = import_theme(source, replace=True)
+        except (OSError, ValueError) as exc:
+            self.notify(str(exc), title="THEME IMPORT FAILED", severity="error")
+            return
+        self._register_imported_theme(deck_theme)
+
+    def _register_imported_theme(self, deck_theme: DeckTheme) -> None:
+        self.deck_themes[deck_theme.id] = deck_theme
+        self.register_theme(deck_theme.textual_theme())
+        self._apply_theme(deck_theme.id)
+        self.notify(f"Imported {deck_theme.name}", title="CHROMA MATRIX")
+
+    def _theme_selected(self, theme_id: str | None) -> None:
+        if theme_id:
+            self._apply_theme(theme_id)
+
+    def _apply_theme(self, theme_id: str) -> None:
+        if theme_id not in self.deck_themes:
+            self.notify(f"Unknown theme: {theme_id}", severity="error")
+            return
+        self.theme = theme_id
+        self.deck_config.active_theme = theme_id
+        if not self._persist_preferences:
+            return
+        try:
+            self.config_store.save(self.deck_config)
+        except OSError as exc:
+            self.notify(str(exc), title="CONFIG WRITE FAILED", severity="warning")
 
     def _copy_command(self, args: list[str]) -> None:
         state = self._active_agent()

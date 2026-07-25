@@ -66,9 +66,60 @@ opens Signal Multiplexer for guarded concurrent dispatch to two or more ready
 agents.
 
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
-the active agent. Start with `/help`; current commands include `/new`, `/restore`,
-`/agents`, `/agent`, `/rename`, `/interrupt`, `/retry`, `/disconnect`,
-`/archive`, `/dispatch`, `/older`, `/clear`, `/path`, and `/quit`.
+the active module. Start with `/help`; current commands include `/new`,
+`/restore`, `/agents`, `/agent`, `/rename`, `/interrupt`, `/retry`,
+`/disconnect`, `/archive`, `/dispatch`, `/module`, `/theme`, `/journal`,
+`/older`, `/clear`, `/path`, and `/quit`.
+
+## Deck modules
+
+Cyberdeck is organized as a permanent deck shell with switchable workspaces.
+The agent command center remains the default module, and live agent states stay
+visible in the left rail from every workspace. Select an agent to return to its
+command center, press `Ctrl+M` to cycle modules, or use `/module NAME`.
+
+The built-in Journal stores user-owned Markdown rather than a database. It uses
+one `YYYY-MM-DD.md` file per day, provides date navigation and content search,
+and atomically autosaves its multi-line editor. The main document receives focus
+when Journal opens; use `Ctrl+L` for the deck command line, Escape to return to
+the editor, and `Ctrl+S` to save immediately. Ordinary deck-prompt text becomes
+a timestamped quick entry while Journal is active. Use `/journal YYYY-MM-DD`,
+`/today`, and `/save` for direct control.
+
+Journal files are UTF-8 and support Japanese and mixed-language writing,
+rendering, reload, and normalized content search. IME composition and glyph
+appearance depend on the terminal emulator and installed font.
+
+By default, journal files live in Cyberdeck's platform data directory:
+
+- macOS: `~/Library/Application Support/Cyberdeck/journal`
+- Linux: `$XDG_DATA_HOME/cyberdeck/journal` or `~/.local/share/cyberdeck/journal`
+- Windows: `%APPDATA%/Cyberdeck/journal`
+
+Set `journal.directory` in Cyberdeck's generated `config.toml` to place the
+journal in a Git repository, synced folder, or another location.
+
+The Python `DeckModule` contract is currently provisional and used only by the
+built-in modules. Modules declare whether the deck prompt, a workspace editor,
+or a view-only canvas owns input, along with their preferred focus target and
+save behavior. Loading third-party Python packages will follow after this
+contract has been exercised without making an unstable API public.
+
+## Themes
+
+ODS Nightwave remains the default. Themes are data-only TOML files: they can
+change semantic colors and allowlisted terminal text treatments, but cannot
+execute Python or replace structural TCSS. Open the selector with `/theme`,
+apply one with `/theme THEME_ID`, or validate and copy a local file with:
+
+```text
+/theme import ./my-theme.toml
+```
+
+See [`examples/themes/afterglow.toml`](examples/themes/afterglow.toml) for the
+version 1 format. Imported themes are stored beside Cyberdeck's user data and
+the active choice is persisted in `config.toml`. If a selected theme is missing
+or invalid at startup, Cyberdeck visibly falls back to ODS Nightwave.
 
 ## Current scope
 
@@ -77,6 +128,8 @@ the active agent. Start with `/help`; current commands include `/new`, `/restore
 - Terminal-style Markdown conversation rendering with durable timestamps
 - Toggleable normalized command/file/tool operations console (`Ctrl+O`)
 - ODS status rails, activity states, background unread counts, and agent switching
+- Switchable built-in workspaces with a daily Markdown Journal
+- Runtime-selectable, validated data-only themes
 - Inline, risk-tiered ICE gates for command and file-change approvals
 - Explicit transport-failure visibility and resume-based recovery
 - Guarded concurrent dispatch with per-target partial-failure reporting

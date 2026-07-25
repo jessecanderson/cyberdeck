@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from rich.cells import cell_len, chop_cells
 
 from cyberdeck.app import (
     AgentSwitcher,
@@ -66,6 +67,16 @@ def test_boot_contains_fictional_japanese_extension_module() -> None:
     assert "零界技研・企業拡張領域" in boot_text
     assert "神経接続規格" in boot_text
     assert "境界外通信は記録されます" in boot_text
+
+
+def test_boot_lines_clip_to_terminal_cells_without_wrapping() -> None:
+    width = 32
+    japanese = next(
+        line for line, _style, _delay in BootScreen.BOOT_LINES if "零界技研" in line
+    )
+    clipped = chop_cells(japanese, width)[0]
+    assert cell_len(clipped) <= width
+    assert width - cell_len(clipped) >= 0
 
 
 @pytest.mark.asyncio
