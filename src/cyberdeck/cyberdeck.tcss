@@ -18,17 +18,17 @@ Screen { background: $void; color: $foreground; }
 #workspace { height: 1fr; }
 #sidebar { width: 34; min-width: 26; background: $background; border-right: solid $surface-lighten-2; }
 #sidebar-title { width: 100%; height: 3; padding: 1 0; color: $cyan; text-style: $deck-heading-style; content-align: center middle; }
-#agents { height: 1fr; background: transparent; }
+#agents { height: 2fr; background: transparent; }
 #agents > ListItem { height: 3; padding: 0 2; color: $muted; }
 #agents > ListItem.--highlight { background: $surface; color: $cyan; border-left: thick $cyan; }
 #modules-title { width: 100%; height: 2; color: $cyan; text-style: $deck-heading-style; content-align: center middle; border-top: solid $surface-lighten-2; }
-#modules { height: 7; background: transparent; }
+#modules { height: 1fr; min-height: 6; max-height: 16; background: transparent; }
 #modules > ListItem { height: 3; padding: 0 2; color: $muted; }
 #modules > ListItem.--highlight { background: $panel; color: $cyan; border-left: thick $magenta; }
 #spawn-hint { height: 3; padding: 0 2; color: $muted; border-top: solid $surface-lighten-2; content-align: left middle; }
 
 #main-panel { width: 1fr; min-width: 0; background: $void; }
-#agent-module, #journal-module { width: 100%; height: 1fr; }
+.deck-module { width: 100%; height: 1fr; }
 #agent-header {
     height: 4; padding: 1 2 0 2; background: $surface; color: $cyan;
     border-bottom: solid $secondary-muted;

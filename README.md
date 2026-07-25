@@ -143,11 +143,19 @@ By default, journal files live in Cyberdeck's platform data directory:
 Set `journal.directory` in Cyberdeck's generated `config.toml` to place the
 journal in a Git repository, synced folder, or another location.
 
-The Python `DeckModule` contract is currently provisional and used only by the
-built-in modules. Modules declare whether the deck prompt, a workspace editor,
-or a view-only canvas owns input, along with their preferred focus target and
-save behavior. Loading third-party Python packages will follow after this
-contract has been exercised without making an unstable API public.
+Cyberdeck Module API v1 supports trusted external Python workspaces installed
+outside Homebrew's cellar. Modules survive `brew upgrade`, can be mounted,
+enabled, disabled, and removed without stopping active agents, and remain
+visibly quarantined if they fail. Start a module project with:
+
+```bash
+cyberdeck module init signal-status
+cd cyberdeck-module-signal-status
+cyberdeck module link .
+```
+
+See [Module API v1](docs/modules.md) for packaging, entry points, trust,
+compatibility, hot lifecycle behavior, and publishing instructions.
 
 ## Themes
 
