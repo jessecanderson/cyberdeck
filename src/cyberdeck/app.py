@@ -24,7 +24,14 @@ from textual.css.query import NoMatches
 from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, ListItem, ListView, Static
 
-from .domain import AgentState, AgentStatus, OperationEntry, ThreadSummary, TranscriptEntry
+from .domain import (
+    AgentState,
+    AgentStatus,
+    OperationEntry,
+    PendingApproval,
+    ThreadSummary,
+    TranscriptEntry,
+)
 from .manager import AgentManager
 from .providers import AgentEvent
 
@@ -87,6 +94,14 @@ class BootScreen(Screen[None]):
         ("  Sandbox walls..... [████████████████████] 100%", "#52e891", 0.07),
         ("  Corporate telemetry................................. ABSENT", "#52e891", 0.08),
         ("", "", 0.04),
+        ("【 零界技研・企業拡張領域 】", "bold #e62acb", 0.12),
+        ("  神経接続規格................ 読込完了", "#00e8f2", 0.06),
+        ("  認証鍵...................... 有効", "#52e891", 0.06),
+        ("  思考隔離層.................. 安定", "#52e891", 0.06),
+        ("  擬似記憶領域................ 接続", "#52e891", 0.06),
+        ("  外部監視.................... 検出なし", "#52e891", 0.08),
+        ("  警告：境界外通信は記録されます", "bold #e9b949", 0.12),
+        ("", "", 0.04),
         ("[ BOOT ] Searching bootable media", "bold #e62acb", 0.10),
         ("  PXE neural uplink................................. TIMEOUT", "#e9b949", 0.06),
         ("  /dev/nvme0n1p1.... CYBERDECK_CORE ................ VALID", "#52e891", 0.06),
@@ -112,7 +127,7 @@ class BootScreen(Screen[None]):
         ("  [ OK ] Started transcript renderer", "#52e891", 0.05),
         ("  [ OK ] Reached target cyberdeck.uplink", "#52e891", 0.10),
         ("", "", 0.04),
-        ("SYSTEM READY // HANDING CONTROL TO /CYBERDECK/CORE", "bold #00e8f2", 0.22),
+        ("SYSTEM READY // システム起動完了 // HANDING CONTROL TO /CYBERDECK/CORE", "bold #00e8f2", 0.22),
     ]
 
     def compose(self) -> ComposeResult:
@@ -135,7 +150,7 @@ class BootScreen(Screen[None]):
         glyphs = ("·", "∙", "░", "﹒")
         interference_row = (
             self._noise_rng.randrange(height)
-            if width > 24 and self._noise_rng.random() < 0.25
+            if width > 24 and self._noise_rng.random() < 0.45
             else -1
         )
         for row_index, (line, style) in enumerate(rows):
@@ -143,14 +158,14 @@ class BootScreen(Screen[None]):
             frame.append(clipped, style=style)
             remainder = width - len(clipped)
             cells = [" "] * remainder
-            for _ in range(max(1, remainder // 90)):
+            for _ in range(max(2, remainder // 58)):
                 if cells:
                     cells[self._noise_rng.randrange(len(cells))] = self._noise_rng.choice(glyphs)
             if row_index == interference_row and remainder > 8:
                 start = self._noise_rng.randrange(max(1, remainder - 6))
-                length = min(self._noise_rng.randrange(4, 12), remainder - start)
+                length = min(self._noise_rng.randrange(8, 25), remainder - start)
                 cells[start : start + length] = "─" * length
-            frame.append("".join(cells), style="#172936")
+            frame.append("".join(cells), style="#244255")
             if row_index < height - 1:
                 frame.append("\n")
         log.update(frame)
@@ -195,7 +210,7 @@ Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-dialog"):
-            yield Label("ODS // COMMAND REFERENCE", id="help-title")
+            yield Label("ODS // COMMAND REFERENCE // 操作一覧", id="help-title")
             yield Static(self.HELP_TEXT, id="help-content")
             yield Static("ESC  RETURN", classes="modal-help")
 
@@ -203,41 +218,76 @@ Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit
         self.dismiss(None)
 
 
-class FirewallRequest(ModalScreen[str]):
+def ice_level(agent: AgentState, approval: PendingApproval) -> tuple[str, str]:
+    """Classify an approval for display; the provider remains the authority."""
+    params = approval.params
+    command = str(params.get("command") or "").casefold()
+    dangerous = (
+        "rm -rf", "sudo ", "git reset --hard", "git clean -f", "mkfs",
+        "dd if=", "chmod -r", "chown -r", "> /dev/",
+    )
+    if any(pattern in command for pattern in dangerous) or (
+        ("curl " in command or "wget " in command) and "|" in command
+    ):
+        return "BLACK ICE", "#ff243b"
+    grant_root = params.get("grantRoot")
+    if grant_root:
+        try:
+            Path(grant_root).expanduser().resolve().relative_to(agent.config.working_directory)
+        except (OSError, RuntimeError, ValueError):
+            return "BLACK ICE", "#ff243b"
+    if approval.method == "item/commandExecution/requestApproval":
+        return "GRAY ICE", "#e9b949"
+    return "WHITE ICE", "#00e8f2"
+
+
+class ApprovalMessage(Static):
+    can_focus = True
     BINDINGS: ClassVar = [
-        ("a", "authorize", "Authorize once"),
-        ("t", "trust", "Trust for session"),
-        ("d", "deny", "Deny"),
-        ("escape", "deny", "Deny"),
+        ("y", "authorize", "Open once"),
+        ("a", "trust", "Trust session"),
+        ("n", "deny", "Seal"),
+        ("escape", "release", "Return"),
     ]
 
-    def __init__(self, agent: AgentState, event: AgentEvent) -> None:
-        super().__init__()
-        self.agent, self.event = agent, event
+    def __init__(self, agent: AgentState, approval: PendingApproval) -> None:
+        self.agent, self.approval = agent, approval
+        level, _ = ice_level(agent, approval)
+        super().__init__(classes=f"approval-message {level.lower().replace(' ', '-')}")
 
-    def compose(self) -> ComposeResult:
-        params = self.event.params or {}
-        is_command = self.event.method == "item/commandExecution/requestApproval"
+    def render(self):
+        params = self.approval.params
+        level, color = ice_level(self.agent, self.approval)
+        is_command = self.approval.method == "item/commandExecution/requestApproval"
         details = Text()
         for label, value in (
-            ("PROCESS", f"{self.agent.config.name}@codex"),
+            ("OPERATIVE", self.agent.config.name.upper()),
             ("ACTION", "EXECUTE COMMAND" if is_command else "MODIFY FILES"),
             ("TARGET", params.get("command") or params.get("grantRoot") or "workspace files"),
             ("PATH", params.get("cwd") or str(self.agent.config.working_directory)),
             ("REASON", params.get("reason") or "Agent operation requires authorization"),
         ):
-            details.append(f"{label:<10}", style="bold #ff3b4f")
+            details.append(f"{label:<10}", style=f"bold {color}")
             details.append(f"{value}\n", style="#f4d8dc")
-        actions = Text("[A] AUTHORIZE ONCE   [T] TRUST SESSION   [D] DENY", style="bold #ff3b4f")
+        actions = Text("[Y] OPEN ONCE   [A] TRUST SESSION   [N] SEAL", style=f"bold {color}")
         actions.justify = "center"
-        yield Static(
-            Panel(Group(details, Text(""), actions), title="FIREWALL ACCESS REQUEST", box=box.DOUBLE,
-                  border_style="#ff243b", padding=(1, 1)), id="firewall-panel"
+        return Panel(
+            Group(details, Text(""), actions),
+            title=f"{level} // ICE GATE // AUTHORIZATION REQUIRED",
+            box=box.DOUBLE,
+            border_style=color,
+            padding=(0, 1),
         )
 
-    def action_authorize(self) -> None: self.dismiss("accept")
-    def action_trust(self) -> None: self.dismiss("acceptForSession")
-    def action_deny(self) -> None: self.dismiss("decline")
+    def _decide(self, decision: str) -> None:
+        self.disabled = True
+        self.app._approval_decided(self.agent, self.approval, decision)
+        self.app.query_one("#prompt", Input).focus()
+
+    def action_authorize(self) -> None: self._decide("accept")
+    def action_trust(self) -> None: self._decide("acceptForSession")
+    def action_deny(self) -> None: self._decide("decline")
+    def action_release(self) -> None: self.app.query_one("#prompt", Input).focus()
 
 
 class SpawnAgent(ModalScreen[tuple[str, Path] | None]):
@@ -246,16 +296,16 @@ class SpawnAgent(ModalScreen[tuple[str, Path] | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="spawn-dialog"):
             yield Label("ODS // INITIALIZE UPLINK", id="spawn-title")
-            yield Input(placeholder="Callsign", id="agent-name")
-            yield Input(value=str(Path.cwd()), placeholder="Working directory", id="agent-path")
+            yield Input(placeholder="Callsign", id="spawn-agent-name")
+            yield Input(value=str(Path.cwd()), placeholder="Working directory", id="spawn-agent-path")
             yield Static("ENTER  JACK IN   •   ESC  ABORT", classes="modal-help", id="spawn-help")
 
     @on(Input.Submitted)
     def submit(self) -> None:
-        name = self.query_one("#agent-name", Input).value.strip()
-        path = Path(self.query_one("#agent-path", Input).value).expanduser().resolve()
+        name = self.query_one("#spawn-agent-name", Input).value.strip()
+        path = Path(self.query_one("#spawn-agent-path", Input).value).expanduser().resolve()
         if not name:
-            self.query_one("#agent-name", Input).focus(); return
+            self.query_one("#spawn-agent-name", Input).focus(); return
         if not path.is_dir():
             self.query_one("#spawn-help", Static).update("PATH NOT FOUND // RETRY"); return
         self.dismiss((name, path))
@@ -561,33 +611,37 @@ class CyberdeckApp(App[None]):
         self._history_index: int | None = None
         self._history_draft = ""
         self._draft_agent_id: str | None = None
+        self._transition_serial = 0
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="top-rail"):
-            yield Static("ODS // CYBERDECK", id="deck-brand")
+            yield Static("ODS // CYBERDECK // 電脳端末", id="deck-brand")
             yield Static(id="uplink-count")
             yield Static(id="deck-clock")
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar"):
-                yield Label("──── AGENTS ────", id="sidebar-title")
+                yield Label("── AGENTS // 接続 ──", id="sidebar-title")
                 yield ListView(id="agents")
                 yield Static("^N NEW\n^P MATRIX", id="spawn-hint")
             with Vertical(id="main-panel"):
-                with Vertical(id="agent-header"), Horizontal(id="agent-primary"):
-                    yield Static("NO ACTIVE UPLINK", id="agent-name")
-                    yield Static(id="agent-model")
-                    yield Static("│ STATE OFFLINE", id="agent-state")
-                    yield Static("│ awaiting uplink", id="agent-activity")
-                    yield Static("NET [····]", id="agent-network")
-                    yield Static("MNEM [······] --", id="agent-mnem")
-                    yield Static(id="agent-cwd")
+                with Vertical(id="agent-header"):
+                    with Horizontal(id="agent-primary"):
+                        yield Static("NO ACTIVE UPLINK", id="agent-name")
+                        yield Static(id="agent-model")
+                        yield Static("│ STATE OFFLINE", id="agent-state")
+                        yield Static("│ awaiting uplink", id="agent-activity")
+                        yield Static("NET [····]", id="agent-network")
+                        yield Static("MNEM [······] --", id="agent-mnem")
+                        yield Static(id="agent-cwd")
+                    yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
+                yield Static(id="state-transition")
                 yield VerticalScroll(id="conversation")
                 with Vertical(id="operations-console"):
                     yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
                     yield ListView(id="operations-list")
                 yield Static(id="autocomplete")
                 with Vertical(id="prompt-zone"):
-                    yield Static("▶ DECK://", id="prompt-label")
+                    yield Static("▶ DECK:// 端末", id="prompt-label")
                     with Horizontal(id="prompt-bar"):
                         yield Static("local@deck:~ $", id="prompt-prefix")
                         yield Input(placeholder="jack in... type a command or message", id="prompt")
@@ -595,6 +649,7 @@ class CyberdeckApp(App[None]):
 
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
+        self.query_one("#state-transition").display = False
         self._update_rails(); self.set_interval(1, self._update_rails)
         self.set_interval(0.28, self._update_network)
         self.query_one("#prompt", Input).focus()
@@ -647,10 +702,12 @@ class CyberdeckApp(App[None]):
             indicator = self.screen_stack[0].query_one("#agent-network", Static)
         except (IndexError, NoMatches):
             return
+        self._network_phase = (self._network_phase + 1) % 4
+        self._update_signal_trace(state)
+        self._refresh_agent_labels()
         if not state:
             indicator.update(Text("NET [····]", style="#607087"))
             return
-        self._network_phase = (self._network_phase + 1) % 4
         patterns = ("▁▃▅▇", "▃▅▇▅", "▅▇▅▃", "▇▅▃▁")
         if state.status is AgentStatus.ERROR:
             label, color = "NET [LOST]", "#ff3b4f"
@@ -661,6 +718,50 @@ class CyberdeckApp(App[None]):
         else:
             label, color = f"NET [{patterns[self._network_phase]}]", "#52e891"
         indicator.update(Text(label, style=f"bold {color}"))
+
+    def _update_signal_trace(self, state: AgentState | None) -> None:
+        try:
+            trace = self.screen_stack[0].query_one("#signal-trace", Static)
+        except (IndexError, NoMatches):
+            return
+        if not state:
+            trace.update(Text("CARRIER // 通信  ······················  OFFLINE", style="#283748"))
+            return
+        calm = (
+            "───────╴──────────────",
+            "───────────╴──────────",
+            "───────────────╴──────",
+            "───╴──────────────────",
+        )
+        active = ("▁▃▅▇▅▃▁──▁▃▅▇▅▃▁", "▃▅▇▅▃▁──▃▅▇▅▃▁", "▅▇▅▃▁──▁▃▅▇▅▃", "▇▅▃▁──▁▃▅▇▅▃▁")
+        if state.status is AgentStatus.ERROR:
+            body, label, color = "──────×────────×──────", "SIGNAL LOST // 通信断", "#ff3b4f"
+        elif state.status is AgentStatus.FIREWALL_HOLD:
+            body, label, color = "!─!─!─!─!─!─!─!─!─!─!", "ICE HOLD // 認証待機", "#ff3b4f"
+        elif state.status in {
+            AgentStatus.PROCESSING,
+            AgentStatus.EXECUTING,
+            AgentStatus.EDITING,
+            AgentStatus.RESTORING,
+        }:
+            body, label, color = active[self._network_phase], "ACTIVE CARRIER // 稼働", "#e9b949"
+        else:
+            body, label, color = calm[self._network_phase], "CARRIER LOCK // 通信安定", "#1a8793"
+        trace.update(Text(f"{body}  {label}", style=f"bold {color}"))
+
+    def _show_transition(self, state: AgentState, message: str, color: str) -> None:
+        if state is not self._active_agent():
+            return
+        banner = self.screen_stack[0].query_one("#state-transition", Static)
+        self._transition_serial += 1
+        serial = self._transition_serial
+        banner.update(Text(f"▶ {message} // {state.config.name.upper()}", style=f"bold {color}"))
+        banner.display = True
+        self.set_timer(2.4, lambda: self._hide_transition(serial))
+
+    def _hide_transition(self, serial: int) -> None:
+        if serial == self._transition_serial:
+            self.screen_stack[0].query_one("#state-transition", Static).display = False
 
     def action_spawn_agent(self) -> None: self.push_screen(SpawnAgent(), self._spawn_result)
     def _spawn_result(self, result):
@@ -936,6 +1037,9 @@ class CyberdeckApp(App[None]):
         if state and state.history_cursor:
             conversation.mount(Static("↑ LOAD OLDER TURNS  //  /older", classes="load-older"))
         for entry in entries: conversation.mount(TerminalMessage(entry, state))
+        if state:
+            for approval in state.pending_approvals:
+                conversation.mount(ApprovalMessage(state, approval))
         prefix = main.query_one("#prompt-prefix", Static)
         prefix.update(f"{getpass.getuser()}@{state.config.name}:{self.display_path(state.config.working_directory)} $" if state else "local@deck:~ $")
         self._render_operations(); self._update_rails()
@@ -1089,11 +1193,22 @@ class CyberdeckApp(App[None]):
 
     def _agent_event(self, state: AgentState, event: AgentEvent) -> None:
         if state is not self._active_agent(): state.unread_count += 1
-        if event.kind in {"error", "transport_closed"} and isinstance(self.screen, FirewallRequest) and self.screen.agent is state:
-            self.screen.dismiss("decline")
-        if event.kind == "approval" and event.request_id is not None:
-            self.push_screen(FirewallRequest(state, event), lambda decision: self._approval_decided(state, event, decision))
-        elif event.kind == "error" and state is self._active_agent(): self._write_local(f"error: {event.text}")
+        if event.kind == "status":
+            if event.text == "ready":
+                self._show_transition(state, "CARRIER STABLE // 通信安定", "#52e891")
+            elif event.text in {"processing", "working"}:
+                self._show_transition(state, "SIGNAL ENGAGED // 稼働", "#00e8f2")
+        elif event.kind == "approval":
+            approval = state.pending_approvals[-1] if state.pending_approvals else None
+            level, color = ice_level(state, approval) if approval else ("ICE", "#ff3b4f")
+            self._show_transition(state, f"{level} INTERLOCK // 認証待機", color)
+        elif event.kind in {"error", "transport_closed"}:
+            self._show_transition(state, "SIGNAL LOST // 通信断", "#ff3b4f")
+        if event.kind == "approval" and state is self._active_agent():
+            self._refresh_all()
+            self.call_after_refresh(self._focus_latest_approval)
+            return
+        if event.kind == "error" and state is self._active_agent(): self._write_local(f"error: {event.text}")
         elif event.kind == "assistant_delta" and state is self._active_agent():
             conversation = self.screen_stack[0].query_one("#conversation", VerticalScroll)
             messages = list(conversation.query(TerminalMessage))
@@ -1111,14 +1226,32 @@ class CyberdeckApp(App[None]):
             return
         self._refresh_all()
 
-    def _approval_decided(self, state, event, decision):
-        if event.request_id is not None: self._respond_to_approval(state, event.request_id, decision)
+    def _focus_latest_approval(self) -> None:
+        approvals = list(self.screen_stack[0].query(ApprovalMessage))
+        if approvals:
+            approvals[-1].focus()
+
+    def _approval_decided(
+        self, state: AgentState, approval: PendingApproval, decision: str
+    ) -> None:
+        self._respond_to_approval(state, approval, decision)
 
     @work(exclusive=False)
-    async def _respond_to_approval(self, state, request_id, decision):
-        try: await self.manager.respond_approval(state, request_id, decision)
+    async def _respond_to_approval(
+        self, state: AgentState, approval: PendingApproval, decision: str
+    ) -> None:
+        try:
+            await self.manager.respond_approval(state, approval.request_id, decision)
+            level, _ = ice_level(state, approval)
+            result = {
+                "accept": "ICE GATE OPEN // APPROVED ONCE",
+                "acceptForSession": "ICE GATE OPEN // SESSION TRUSTED",
+                "decline": "ICE SEALED // ACCESS DENIED",
+            }[decision]
+            state.transcript.append(TranscriptEntry("system", f"{level} // {result}"))
         except Exception as exc:  # noqa: BLE001
-            self._write_local(f"firewall response failed: {exc}")
+            state.transcript.append(TranscriptEntry("system", f"ICE RESPONSE FAILED // {exc}"))
+        self._refresh_all()
 
     def _refresh_all(self) -> None:
         self._refresh_agent_labels()
@@ -1129,20 +1262,23 @@ class CyberdeckApp(App[None]):
         for item, state in zip(view.children, self.manager.agents, strict=False):
             item.query_one(Label).update(self._agent_label(state))
 
-    @staticmethod
-    def _agent_label(state: AgentState) -> Text:
+    def _agent_label(self, state: AgentState) -> Text:
         color = {
             AgentStatus.READY: "#52e891",
             AgentStatus.ERROR: "#ff3b4f",
             AgentStatus.FIREWALL_HOLD: "#ff3b4f",
             AgentStatus.RESTORING: "#e9b949",
         }.get(state.status, "#e62acb")
-        glyph = {
-            AgentStatus.READY: "●",
-            AgentStatus.RESTORING: "↻",
-            AgentStatus.ERROR: "!",
-            AgentStatus.FIREWALL_HOLD: "!",
-        }.get(state.status, "◐")
+        glyphs = {
+            AgentStatus.READY: ("●", "∙", "∙", "∙"),
+            AgentStatus.RESTORING: ("↻", "↺", "↻", "↺"),
+            AgentStatus.PROCESSING: ("◐", "◓", "◑", "◒"),
+            AgentStatus.EXECUTING: ("▰", "▱", "▰", "▱"),
+            AgentStatus.EDITING: ("◆", "◇", "◆", "◇"),
+            AgentStatus.ERROR: ("×", "×", "×", "×"),
+            AgentStatus.FIREWALL_HOLD: ("!", "·", "!", "·"),
+        }
+        glyph = glyphs.get(state.status, ("◐", "◓", "◑", "◒"))[self._network_phase]
         label = Text()
         label.append(f"{glyph} ", style=f"bold {color}")
         label.append(f"SYN::{state.config.name.upper()}", style=f"bold {color}")

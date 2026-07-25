@@ -4,14 +4,23 @@ import pytest
 
 from cyberdeck.app import (
     AgentSwitcher,
+    ApprovalMessage,
+    BootScreen,
     ConfirmScreen,
     CyberdeckApp,
     DispatchScreen,
-    FirewallRequest,
     OperativeControl,
     RestoreScreen,
+    SpawnAgent,
+    ice_level,
 )
-from cyberdeck.domain import AgentConfig, AgentState, AgentStatus, TranscriptEntry
+from cyberdeck.domain import (
+    AgentConfig,
+    AgentState,
+    AgentStatus,
+    PendingApproval,
+    TranscriptEntry,
+)
 from cyberdeck.providers import AgentEvent
 
 
@@ -23,7 +32,11 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#prompt").disabled is False
         assert pilot.app.query_one("#top-rail") is not None
         assert pilot.app.query_one("#conversation") is not None
+        assert pilot.app.query_one("#signal-trace") is not None
+        assert pilot.app.query_one("#state-transition").display is False
         assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
+        assert "接続" in str(pilot.app.query_one("#sidebar-title").renderable)
+        assert "電脳端末" in str(pilot.app.query_one("#deck-brand").renderable)
 
 
 @pytest.mark.asyncio
@@ -48,39 +61,53 @@ async def test_boot_screen_is_shown() -> None:
         await pilot.press("enter")
 
 
-@pytest.mark.asyncio
-async def test_firewall_request_is_red_modal_and_can_be_denied() -> None:
-    state = AgentState(AgentConfig("ghost", Path("/tmp")))
-    event = AgentEvent(
-        "approval",
-        request_id=7,
-        method="item/commandExecution/requestApproval",
-        params={"command": "npm install", "cwd": "/tmp", "reason": "network access"},
-    )
-    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
-        pilot.app.push_screen(FirewallRequest(state, event))
-        await pilot.pause()
-        assert pilot.app.screen.__class__.__name__ == "FirewallRequest"
-        assert pilot.app.screen.query_one("#firewall-panel") is not None
-        await pilot.press("d")
+def test_boot_contains_fictional_japanese_extension_module() -> None:
+    boot_text = "\n".join(line for line, _style, _delay in BootScreen.BOOT_LINES)
+    assert "零界技研・企業拡張領域" in boot_text
+    assert "神経接続規格" in boot_text
+    assert "境界外通信は記録されます" in boot_text
 
 
 @pytest.mark.asyncio
-async def test_firewall_request_can_be_trusted_for_session() -> None:
-    state = AgentState(AgentConfig("ghost", Path("/tmp")))
-    event = AgentEvent(
-        "approval",
-        request_id=8,
-        method="item/fileChange/requestApproval",
-        params={"grantRoot": "/tmp", "reason": "write generated files"},
-    )
-    result: list[str] = []
+async def test_spawn_agent_inputs_are_visible_and_accept_text() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
-        pilot.app.push_screen(FirewallRequest(state, event), result.append)
+        pilot.app.push_screen(SpawnAgent())
         await pilot.pause()
-        await pilot.press("t")
+        name = pilot.app.screen.query_one("#spawn-agent-name")
+        path = pilot.app.screen.query_one("#spawn-agent-path")
+        assert name.outer_size.height == 3
+        assert path.outer_size.height == 3
+        name.focus()
+        await pilot.press("g", "h", "o", "s", "t")
+        assert name.value == "ghost"
+
+
+@pytest.mark.asyncio
+async def test_approval_request_renders_inline_without_blocking_other_agents() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD)
+        state.pending_approvals.append(PendingApproval(
+            7,
+            "item/commandExecution/requestApproval",
+            {"command": "npm install", "cwd": "/tmp", "reason": "network access"},
+        ))
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app._render_active()
         await pilot.pause()
-        assert result == ["acceptForSession"]
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        widget = pilot.app.query_one(ApprovalMessage)
+        assert widget is not None
+        assert ice_level(state, widget.approval)[0] == "GRAY ICE"
+
+
+def test_dangerous_command_is_classified_as_black_ice() -> None:
+    state = AgentState(AgentConfig("ghost", Path("/tmp")))
+    approval = PendingApproval(
+        8,
+        "item/commandExecution/requestApproval",
+        {"command": "sudo rm -rf /tmp/cache"},
+    )
+    assert ice_level(state, approval)[0] == "BLACK ICE"
 
 
 @pytest.mark.asyncio
@@ -184,3 +211,14 @@ async def test_kill_requires_confirmation() -> None:
         await pilot.press("y")
         await pilot.pause()
         assert state not in pilot.app.manager.agents
+
+
+@pytest.mark.asyncio
+async def test_agent_events_show_real_state_transition_banner() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app._agent_event(state, AgentEvent("status", "processing"))
+        banner = pilot.app.query_one("#state-transition")
+        assert banner.display is True
+        assert "SIGNAL ENGAGED // 稼働" in str(banner.renderable)

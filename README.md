@@ -77,7 +77,7 @@ the active agent. Start with `/help`; current commands include `/new`, `/restore
 - Terminal-style Markdown conversation rendering with durable timestamps
 - Toggleable normalized command/file/tool operations console (`Ctrl+O`)
 - ODS status rails, activity states, background unread counts, and agent switching
-- Per-request command and file-change firewall approvals
+- Inline, risk-tiered ICE gates for command and file-change approvals
 - Explicit transport-failure visibility and resume-based recovery
 - Guarded concurrent dispatch with per-target partial-failure reporting
 - Clean provider boundary for future ACP and other agent backends

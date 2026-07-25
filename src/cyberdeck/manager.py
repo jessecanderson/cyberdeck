@@ -10,6 +10,7 @@ from .domain import (
     AgentStatus,
     HistoryPage,
     OperationState,
+    PendingApproval,
     ThreadSummary,
     TranscriptEntry,
     operation_from_item,
@@ -228,6 +229,13 @@ class AgentManager:
         self, state: AgentState, request_id: int | str, decision: str
     ) -> None:
         await self._adapters[str(state.config.id)].respond_approval(request_id, decision)
+        state.pending_approvals[:] = [
+            approval for approval in state.pending_approvals
+            if approval.request_id != request_id
+        ]
+        if not state.pending_approvals:
+            state.status = AgentStatus.PROCESSING
+            state.current_activity = "resuming authorized turn"
 
     async def shutdown(self) -> None:
         await asyncio.gather(*(adapter.stop() for adapter in self._adapters.values()))
@@ -267,7 +275,15 @@ class AgentManager:
                     operation.state = OperationState.SUCCEEDED
             elif event.kind == "approval":
                 state.status = AgentStatus.FIREWALL_HOLD
-                state.current_activity = "authorization required"
+                state.current_activity = "ICE authorization required"
+                if event.request_id is not None:
+                    state.pending_approvals.append(
+                        PendingApproval(
+                            request_id=event.request_id,
+                            method=event.method,
+                            params=event.params or {},
+                        )
+                    )
             elif event.kind == "token_usage":
                 usage = (event.params or {}).get("tokenUsage") or {}
                 last = usage.get("last") or {}
@@ -278,6 +294,7 @@ class AgentManager:
                 state.status = AgentStatus.ERROR
                 state.current_activity = event.text
                 state.error_message = event.text
+                state.pending_approvals.clear()
             self._on_event(state, event)
       except asyncio.CancelledError:
         raise

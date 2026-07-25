@@ -15,7 +15,7 @@ class AgentStatus(str, Enum):
     PROCESSING = "processing"
     EXECUTING = "executing"
     EDITING = "editing"
-    FIREWALL_HOLD = "firewall hold"
+    FIREWALL_HOLD = "ice hold"
     ERROR = "error"
     STOPPED = "stopped"
 
@@ -39,6 +39,14 @@ class AgentConfig:
 class TranscriptEntry:
     role: str
     text: str
+    created_at: datetime = field(default_factory=datetime.now)
+
+
+@dataclass(slots=True)
+class PendingApproval:
+    request_id: int | str
+    method: str
+    params: dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
 
 
@@ -98,6 +106,7 @@ class AgentState:
     prompt_draft: str = ""
     error_message: str | None = None
     recovery_attempts: int = 0
+    pending_approvals: list[PendingApproval] = field(default_factory=list)
 
 
 def parse_timestamp(value: Any) -> datetime:

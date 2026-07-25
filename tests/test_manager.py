@@ -4,6 +4,7 @@ import pytest
 
 from cyberdeck.domain import AgentStatus, HistoryPage
 from cyberdeck.manager import AgentManager
+from cyberdeck.providers import AgentEvent
 
 
 class FakeAdapter:
@@ -15,6 +16,7 @@ class FakeAdapter:
         self.stopped = False
         self.names = []
         self.queue = []
+        self.approvals = []
 
     async def events(self):
         while self.queue:
@@ -27,6 +29,8 @@ class FakeAdapter:
     async def set_thread_name(self, thread_id, name): self.names.append((thread_id, name))
     async def interrupt_turn(self): pass
     async def archive_thread(self): pass
+    async def respond_approval(self, request_id, decision):
+        self.approvals.append((request_id, decision))
     async def stop(self): self.stopped = True
     async def resume_thread(self, thread_id, cwd):
         self.thread_id = thread_id
@@ -94,3 +98,23 @@ async def test_dispatch_rejects_busy_target_before_any_send() -> None:
     with pytest.raises(ValueError, match=r"two \(EXECUTING\)"):
         await deck.dispatch([first, second], "scan")
     assert first.transcript == []
+
+
+@pytest.mark.asyncio
+async def test_approval_is_owned_by_agent_until_answered() -> None:
+    deck = manager(); state, adapter = attach(deck, "ghost")
+    adapter.queue.append(AgentEvent(
+        "approval",
+        request_id=42,
+        method="item/fileChange/requestApproval",
+        params={"grantRoot": "/tmp"},
+    ))
+    await deck._pump(state, adapter)
+    assert state.status is AgentStatus.FIREWALL_HOLD
+    assert state.current_activity == "ICE authorization required"
+    assert [approval.request_id for approval in state.pending_approvals] == [42]
+
+    await deck.respond_approval(state, 42, "accept")
+    assert adapter.approvals == [(42, "accept")]
+    assert state.pending_approvals == []
+    assert state.status is AgentStatus.PROCESSING
