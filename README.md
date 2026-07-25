@@ -23,8 +23,10 @@ autosave, search, themes, and mixed English/Japanese writing.
 
 ## Requirements
 
-- Python 3.11+ (the repository pins pyenv to 3.13.0)
+- Homebrew on macOS for the recommended installation (Python is installed as
+  a formula dependency)
 - `codex` installed and authenticated (`codex login`)
+- Python 3.11+ only when installing from source or with pipx
 
 ## Install
 
@@ -35,17 +37,21 @@ codex login
 codex --version
 ```
 
-The simplest supported installation uses the Cyberdeck Homebrew tap:
+The recommended installation uses the public Cyberdeck Homebrew tap. Homebrew
+adds the tap automatically when you run the fully qualified install command:
 
 ```bash
 brew install jessecanderson/tap/cyberdeck
 cyberdeck --version
+cyberdeck
 ```
 
-Upgrade or remove it with:
+Upgrade, reinstall, or remove it with:
 
 ```bash
+brew update
 brew upgrade cyberdeck
+brew reinstall cyberdeck
 brew uninstall cyberdeck
 ```
 
@@ -57,15 +63,9 @@ pipx install git+https://github.com/jessecanderson/cyberdeck.git
 cyberdeck
 ```
 
-PyPI installation will become available after trusted publishing is configured:
-
-```bash
-pipx install cyberdeck-tui
-cyberdeck --version
-```
-
 Versioned wheel and source-distribution files are also attached to each
-[GitHub Release](https://github.com/jessecanderson/cyberdeck/releases).
+[GitHub Release](https://github.com/jessecanderson/cyberdeck/releases). PyPI is
+not currently a supported installation channel.
 
 To install from a local clone instead:
 
@@ -88,7 +88,7 @@ pytest -q
 The CI suite verifies Python 3.11 through 3.14 and builds an installable wheel
 and source distribution on Python 3.14.
 
-To upgrade or remove a pipx installation:
+For a pipx installation sourced from GitHub, upgrade or remove it with:
 
 ```bash
 pipx upgrade cyberdeck-tui
