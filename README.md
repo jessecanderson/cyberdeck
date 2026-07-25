@@ -8,15 +8,50 @@ provider uses the experimental Codex app-server protocol over stdio.
 - Python 3.11+ (the repository pins pyenv to 3.13.0)
 - `codex` installed and authenticated (`codex login`)
 
-## Run
+## Install
+
+First, install the Codex CLI, authenticate it, and verify that it is available:
 
 ```bash
-cd ~/Developer/cyberdeck
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
+codex login
+codex --version
+```
+
+The simplest Cyberdeck installation uses
+[pipx](https://pipx.pypa.io/stable/), which keeps the application isolated
+while exposing the `cyberdeck` command globally:
+
+```bash
+pipx install git+https://github.com/jessecanderson/cyberdeck.git
 cyberdeck
 ```
+
+To install from a local clone instead:
+
+```bash
+git clone https://github.com/jessecanderson/cyberdeck.git
+cd cyberdeck
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install .
+cyberdeck
+```
+
+For development, install the editable package and test dependencies:
+
+```bash
+python -m pip install -e '.[dev]'
+pytest -q
+```
+
+To upgrade or remove a pipx installation:
+
+```bash
+pipx upgrade cyberdeck-tui
+pipx uninstall cyberdeck-tui
+```
+
+## Usage
 
 Press `Ctrl+N` to spawn an agent, choose a callsign and working directory, then
 enter a prompt. Cyberdeck stores that callsign on the Codex thread itself.
