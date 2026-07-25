@@ -114,6 +114,41 @@ def test_module_cli_exposes_complete_local_workflow() -> None:
         assert parsed.command == "module"
 
 
+def test_module_commands_complete_actions_and_external_module_ids(tmp_path: Path) -> None:
+    registry = ModuleRegistry(tmp_path / "modules", tmp_path / "config")
+    registry.records["system-status"] = ModuleRecord(
+        "system-status",
+        "cyberdeck-module-system-status",
+        "0.1.0",
+        "local",
+        "system-status-env",
+        enabled=False,
+        status=ModuleStatus.DISABLED.value,
+    )
+    app = CyberdeckApp(skip_boot=True, module_registry=registry)
+    assert app._complete("/module li") == [
+        ("link", "link an editable local module project")
+    ]
+    assert app._complete("/module enable sys") == [
+        ("system-status", "disabled external module")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_completing_module_action_inserts_argument_separator(tmp_path: Path) -> None:
+    async with CyberdeckApp(
+        skip_boot=True,
+        config_store=ConfigStore(tmp_path / "config.toml"),
+        journal_store=JournalStore(tmp_path / "journal"),
+        module_registry=ModuleRegistry(tmp_path / "modules", tmp_path / "module-config"),
+    ).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.value = "/module li"
+        await pilot.pause()
+        pilot.app.action_complete_prompt()
+        assert prompt.value == "/module link "
+
+
 def test_pending_update_rolls_back_when_new_environment_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
