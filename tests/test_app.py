@@ -1,8 +1,10 @@
+import sys
 from pathlib import Path
 
 import pytest
 from rich.cells import cell_len, chop_cells
 
+from cyberdeck import __version__
 from cyberdeck.app import (
     AgentSwitcher,
     ApprovalMessage,
@@ -14,6 +16,7 @@ from cyberdeck.app import (
     RestoreScreen,
     SpawnAgent,
     ice_level,
+    main,
 )
 from cyberdeck.domain import (
     AgentConfig,
@@ -77,6 +80,16 @@ def test_boot_lines_clip_to_terminal_cells_without_wrapping() -> None:
     clipped = chop_cells(japanese, width)[0]
     assert cell_len(clipped) <= width
     assert width - cell_len(clipped) >= 0
+
+
+def test_version_flag_reports_installed_package_version(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(sys, "argv", ["cyberdeck", "--version"])
+    with pytest.raises(SystemExit) as exit_info:
+        main()
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"cyberdeck {__version__}"
 
 
 @pytest.mark.asyncio

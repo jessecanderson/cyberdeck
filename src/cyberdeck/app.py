@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import asyncio
 import getpass
 import json
@@ -27,6 +28,7 @@ from textual.screen import ModalScreen, Screen
 from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 
+from . import __version__
 from .config import ConfigStore, DeckConfig
 from .domain import (
     AgentState,
@@ -1840,5 +1842,14 @@ class CyberdeckApp(App[None]):
         except ValueError: return str(path)
 
 
-def main() -> None: CyberdeckApp().run()
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        prog="cyberdeck",
+        description="Open Deck Systems terminal workspace for local AI agents",
+    )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.parse_args()
+    CyberdeckApp().run()
+
+
 if __name__ == "__main__": main()

@@ -1,5 +1,7 @@
 # CYBERDECK
 
+[![CI](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml)
+
 A neon, keyboard-first TUI for running multiple local coding agents. The first
 provider uses the experimental Codex app-server protocol over stdio.
 
@@ -25,6 +27,17 @@ while exposing the `cyberdeck` command globally:
 pipx install git+https://github.com/jessecanderson/cyberdeck.git
 cyberdeck
 ```
+
+The first packaged release will make the shorter package-index installation
+available without a Git checkout:
+
+```bash
+pipx install cyberdeck-tui
+cyberdeck --version
+```
+
+Until that release is published, use the Git URL above. CI already validates
+the same wheel and source-distribution artifacts that will be published.
 
 To install from a local clone instead:
 
