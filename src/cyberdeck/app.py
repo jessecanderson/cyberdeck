@@ -1009,7 +1009,10 @@ class CyberdeckApp(App[None]):
 
     def _hide_transition(self, serial: int) -> None:
         if serial == self._transition_serial:
-            self.screen_stack[0].query_one("#state-transition", Static).display = False
+            try:
+                self.screen_stack[0].query_one("#state-transition", Static).display = False
+            except (IndexError, NoMatches):
+                return
 
     def action_spawn_agent(self) -> None: self.push_screen(SpawnAgent(), self._spawn_result)
     def _spawn_result(self, result):
@@ -1882,7 +1885,10 @@ class CyberdeckApp(App[None]):
         self._render_active()
 
     def _refresh_agent_labels(self) -> None:
-        view = self.screen_stack[0].query_one("#agents", ListView)
+        try:
+            view = self.screen_stack[0].query_one("#agents", ListView)
+        except (IndexError, NoMatches):
+            return
         for item, state in zip(view.children, self.manager.agents, strict=False):
             item.query_one(Label).update(self._agent_label(state))
 
