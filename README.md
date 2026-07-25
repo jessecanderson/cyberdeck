@@ -5,6 +5,22 @@
 A neon, keyboard-first TUI for running multiple local coding agents. The first
 provider uses the experimental Codex app-server protocol over stdio.
 
+## Visual tour
+
+### Agent Command Center
+
+Run independent agent uplinks, follow live state and context telemetry, review
+normalized operations, and keep approvals inline with the conversation.
+
+![Cyberdeck Agent Command Center](docs/screenshots/agent-command.svg)
+
+### Journal module
+
+Switch the main deck canvas into a UTF-8 Markdown journal with daily entries,
+autosave, search, themes, and mixed English/Japanese writing.
+
+![Cyberdeck Journal module](docs/screenshots/journal.svg)
+
 ## Requirements
 
 - Python 3.11+ (the repository pins pyenv to 3.13.0)
