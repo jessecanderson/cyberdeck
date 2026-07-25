@@ -39,6 +39,7 @@ Releases = "https://github.com/jessecanderson/cyberdeck/releases"
 
 [project.optional-dependencies]
 dev = [
+  "hatchling>=1.31,<2",
   "pytest>=9.1,<10",
   "pytest-asyncio>=1.4,<2",
   "ruff>=0.16,<1",
