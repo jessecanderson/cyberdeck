@@ -1380,7 +1380,9 @@ class CyberdeckApp(App[None]):
         view = self.screen_stack[0].query_one("#modules", ListView)
         ordered = self._ordered_module_ids()
         for item, module_id in zip(view.children, ordered, strict=False):
-            item.query_one(Label).update(self._module_label_id(module_id))
+            labels = list(item.query(Label))
+            if labels:
+                labels[0].update(self._module_label_id(module_id))
 
     def _module_label(self, module: DeckModule) -> Text:
         return self._module_label_id(module.manifest.id)
