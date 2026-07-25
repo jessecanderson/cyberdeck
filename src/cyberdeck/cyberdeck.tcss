@@ -109,7 +109,7 @@ BootScreen {
     border-top: solid #153244; content-align: right middle;
 }
 
-SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen, ThemeScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
+SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen, ThemeScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
 #spawn-dialog, #help-dialog, #restore-dialog {
     width: 76; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
@@ -138,6 +138,9 @@ SpawnAgent, HelpScreen, RestoreScreen, OperationDetail, ConfirmScreen, Operative
 #theme-list { height: 1fr; margin: 1 0; background: #050a10; }
 #theme-list > ListItem { height: 3; padding: 0 1; color: $muted; }
 #theme-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
+#about-dialog { width: 76; max-width: 94%; height: 34; padding: 1 2; background: $surface; border: double $cyan; }
+#about-title { height: 3; color: $cyan; text-style: $deck-heading-style; content-align: center middle; border-bottom: solid $primary-muted; }
+#about-content { height: 1fr; padding: 1 2; color: $foreground; }
 #confirm-dialog { height: 12; border: double $red; }
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }

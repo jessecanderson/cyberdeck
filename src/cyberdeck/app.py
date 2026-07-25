@@ -4,10 +4,14 @@ import argparse
 import asyncio
 import getpass
 import json
+import platform
 import random
 import shlex
+import shutil
+import subprocess
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
+from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import ClassVar
 
@@ -29,7 +33,7 @@ from textual.widget import Widget
 from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
 
 from . import __version__
-from .config import ConfigStore, DeckConfig
+from .config import ConfigStore, DeckConfig, user_theme_directory
 from .domain import (
     AgentState,
     AgentStatus,
@@ -62,10 +66,10 @@ class BootScreen(Screen[None]):
         ("       ██████╔╝███████╗╚██████╗██║  ██╗", "bold #e62acb", 0.04),
         ("       ╚═════╝ ╚══════╝ ╚═════╝╚═╝  ╚═╝", "bold #e62acb", 0.08),
         ("", "", 0.04),
-        ("                 C Y B E R D E C K   2 . 5 . 1", "bold #cce7ed", 0.12),
+        ("                 C Y B E R D E C K", "bold #cce7ed", 0.12),
         ("                OPEN DECK SYSTEMS // ROM REVISION 251", "#607087", 0.24),
         ("", "", 0.06),
-        ("CYBERDECK QUANTUM BIOS v0.1.0 // BUILD 2088.07.24-NIGHTLY", "bold #00e8f2", 0.10),
+        (f"CYBERDECK QUANTUM BIOS v{__version__} // RELEASE CHANNEL", "bold #00e8f2", 0.10),
         ("OPEN DECK SYSTEMS // NO WARRANTY // TRUST NO PROCESS", "#607087", 0.12),
         ("", "", 0.04),
         ("[ FIRMWARE ] Initiating power-on self-test", "bold #e62acb", 0.12),
@@ -213,6 +217,7 @@ class HelpScreen(ModalScreen[None]):
 /theme import PATH    Validate and import a theme
 /journal [YYYY-MM-DD] Open a daily Markdown entry
 /today  /save         Open today / save Journal
+/about                Open system manifest
 /clear  /path        Clear view / show active path
 /help  /quit         Reference / shutdown
 
@@ -229,6 +234,27 @@ Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit
             yield Label("ODS // COMMAND REFERENCE // 操作一覧", id="help-title")
             yield Static(self.HELP_TEXT, id="help-content")
             yield Static("ESC  RETURN", classes="modal-help")
+
+    def action_close(self) -> None:
+        self.dismiss(None)
+
+
+class AboutScreen(ModalScreen[None]):
+    BINDINGS: ClassVar = [("escape", "close", "Close"), ("c", "copy", "Copy")]
+
+    def __init__(self, manifest: str) -> None:
+        super().__init__()
+        self.manifest = manifest
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="about-dialog"):
+            yield Label("SYSTEM MANIFEST // システム情報", id="about-title")
+            yield Static(self.manifest, id="about-content")
+            yield Static("C  COPY DIAGNOSTICS     ESC  RETURN", classes="modal-help")
+
+    def action_copy(self) -> None:
+        self.app.copy_to_clipboard(self.manifest)
+        self.notify("System manifest copied", title="DIAGNOSTICS")
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -735,6 +761,7 @@ class CyberdeckApp(App[None]):
         "/journal": "open a dated journal entry",
         "/today": "open today's journal entry",
         "/save": "save the active journal entry",
+        "/about": "open system manifest",
         "/older": "load 50 older turns",
         "/clear": "clear the active transcript",
         "/path": "show the active working directory",
@@ -1505,6 +1532,7 @@ class CyberdeckApp(App[None]):
         except ValueError as exc: self._write_local(f"command parse error: {exc}"); return
         command, args = parts[0].lower(), parts[1:]
         if command in {"/help", "/?"}: self.push_screen(HelpScreen())
+        elif command == "/about": self.push_screen(AboutScreen(self._system_manifest()))
         elif command == "/restore": self.action_restore()
         elif command == "/new":
             if not args: self.action_spawn_agent()
@@ -1555,6 +1583,51 @@ class CyberdeckApp(App[None]):
             else: self._control_result(state, (command[1:], args[0] if args else None))
         elif command in {"/quit", "/exit"}: self.exit()
         else: self._write_local(f"unknown local command: {command} (try /help)")
+
+    def _system_manifest(self) -> str:
+        codex_version = self._executable_version("codex")
+        rows = [
+            "OPEN DECK SYSTEMS // SAFE DIAGNOSTIC EXPORT",
+            "",
+            f"Cyberdeck...... {__version__}",
+            f"Python......... {platform.python_version()}",
+            f"Textual........ {package_version('textual')}",
+            f"Platform....... {platform.system()} {platform.release()}",
+            f"Architecture... {platform.machine()}",
+            "",
+            f"Active module.. {self.active_module_id}",
+            f"Active theme... {self.deck_config.active_theme}",
+            f"Open agents.... {len(self.manager.agents)}",
+            f"Codex CLI...... {codex_version}",
+            "",
+            f"Config......... {self.display_path(self.config_store.path)}",
+            f"Journal........ {self.display_path(self.journal_store.directory)}",
+            f"Themes......... {self.display_path(user_theme_directory())}",
+            "",
+            "Repository..... https://github.com/jessecanderson/cyberdeck",
+            "Issues......... https://github.com/jessecanderson/cyberdeck/issues",
+            "",
+            "No prompts, transcripts, environment variables, or credentials included.",
+        ]
+        return "\n".join(rows)
+
+    @staticmethod
+    def _executable_version(name: str) -> str:
+        executable = shutil.which(name)
+        if not executable:
+            return "NOT DETECTED"
+        try:
+            result = subprocess.run(
+                [executable, "--version"],
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return "DETECTED // VERSION UNAVAILABLE"
+        output = (result.stdout or result.stderr).strip().splitlines()
+        return output[0] if output else "DETECTED // VERSION UNAVAILABLE"
 
     async def _command_journal(self, args: list[str]) -> None:
         day = datetime.now().astimezone().date()

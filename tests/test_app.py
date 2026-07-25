@@ -6,6 +6,7 @@ from rich.cells import cell_len, chop_cells
 
 from cyberdeck import __version__
 from cyberdeck.app import (
+    AboutScreen,
     AgentSwitcher,
     ApprovalMessage,
     BootScreen,
@@ -58,6 +59,23 @@ async def test_local_help_command_does_not_require_agent() -> None:
 
 
 @pytest.mark.asyncio
+async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> None:
+    copied: list[str] = []
+    monkeypatch.setattr(CyberdeckApp, "_executable_version", staticmethod(lambda _name: "codex 1.2.3"))
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.copy_to_clipboard = copied.append
+        await pilot.app._run_local_command("/about")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, AboutScreen)
+        content = str(pilot.app.screen.query_one("#about-content").renderable)
+        assert f"Cyberdeck...... {__version__}" in content
+        assert "Codex CLI...... codex 1.2.3" in content
+        assert "No prompts, transcripts" in content
+        await pilot.press("c")
+        assert copied == [content]
+
+
+@pytest.mark.asyncio
 async def test_boot_screen_is_shown() -> None:
     async with CyberdeckApp().run_test() as pilot:
         await pilot.pause()
@@ -70,6 +88,8 @@ def test_boot_contains_fictional_japanese_extension_module() -> None:
     assert "零界技研・企業拡張領域" in boot_text
     assert "神経接続規格" in boot_text
     assert "境界外通信は記録されます" in boot_text
+    assert f"QUANTUM BIOS v{__version__}" in boot_text
+    assert "2 . 5 . 1" not in boot_text
 
 
 def test_boot_lines_clip_to_terminal_cells_without_wrapping() -> None:
