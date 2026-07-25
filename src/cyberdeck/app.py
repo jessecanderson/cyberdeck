@@ -779,6 +779,15 @@ class CyberdeckApp(App[None]):
         "/help": "open command reference",
         "/quit": "shut down Cyberdeck",
     }
+    MODULE_ACTIONS: ClassVar = {
+        "install": "install a trusted package, Git URL, wheel, or path",
+        "link": "link an editable local module project",
+        "info": "show external module metadata",
+        "update": "stage an external module update",
+        "enable": "enable an external module",
+        "disable": "disable an external module",
+        "remove": "remove an external module and its environment",
+    }
 
     def __init__(
         self,
@@ -1175,6 +1184,8 @@ class CyberdeckApp(App[None]):
         else:
             head, separator, _ = raw.rpartition(" ")
             prompt.value = f"{head}{separator}{completion}"
+            if head == "/module" and completion in self.MODULE_ACTIONS:
+                prompt.value += " "
         prompt.cursor_position = len(prompt.value)
 
     def _complete(self, value: str) -> list[tuple[str, str]]:
@@ -1190,9 +1201,28 @@ class CyberdeckApp(App[None]):
         words = stripped.split()
         if words and words[0] == "/module" and len(words) == 2 and not value.endswith(" "):
             prefix = words[1].casefold()
-            return [
+            actions = [
+                (action, description)
+                for action, description in self.MODULE_ACTIONS.items()
+                if action.startswith(prefix)
+            ]
+            modules = [
                 (module_id, module.manifest.description)
                 for module_id, module in self.deck_modules.items()
+                if module_id.startswith(prefix)
+            ]
+            return actions + modules
+        if (
+            words
+            and words[0] == "/module"
+            and len(words) == 3
+            and words[1] in {"info", "update", "enable", "disable", "remove"}
+            and not value.endswith(" ")
+        ):
+            prefix = words[2].casefold()
+            return [
+                (module_id, f"{record.status} external module")
+                for module_id, record in self.module_registry.records.items()
                 if module_id.startswith(prefix)
             ]
         if words and words[0] == "/theme" and len(words) == 2 and not value.endswith(" "):
@@ -1350,7 +1380,9 @@ class CyberdeckApp(App[None]):
         view = self.screen_stack[0].query_one("#modules", ListView)
         ordered = self._ordered_module_ids()
         for item, module_id in zip(view.children, ordered, strict=False):
-            item.query_one(Label).update(self._module_label_id(module_id))
+            labels = list(item.query(Label))
+            if labels:
+                labels[0].update(self._module_label_id(module_id))
 
     def _module_label(self, module: DeckModule) -> Text:
         return self._module_label_id(module.manifest.id)
