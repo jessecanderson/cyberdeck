@@ -179,6 +179,10 @@ class HelpScreen(ModalScreen[None]):
 /interrupt  /retry    Stop a turn / restore an errored uplink
 /disconnect /archive  Remove reversibly / archive and remove
 /dispatch             Open SIGNAL MULTIPLEXER
+/send AGENT MESSAGE   Send a prompt to one ready agent
+/pipe AGENT           Forward the latest agent response
+/copy [all|TEXT]      Copy response, transcript, or text
+/kill [AGENT|all]     Disconnect after confirmation
 /clear  /path        Clear view / show active path
 /help  /quit         Reference / shutdown
 
@@ -535,6 +539,10 @@ class CyberdeckApp(App[None]):
         "/disconnect": "reversibly close the active uplink",
         "/archive": "archive and close the active uplink",
         "/dispatch": "transmit to multiple ready agents",
+        "/send": "send a prompt to one ready agent",
+        "/pipe": "forward the latest response to an agent",
+        "/copy": "copy response, transcript, or text",
+        "/kill": "disconnect an agent after confirmation",
         "/older": "load 50 older turns",
         "/clear": "clear the active transcript",
         "/path": "show the active working directory",
@@ -777,6 +785,16 @@ class CyberdeckApp(App[None]):
                 for command, description in self.LOCAL_COMMANDS.items()
                 if command.startswith(value) and command != value
             ]
+        stripped = value.rstrip()
+        words = stripped.split()
+        if words and words[0] in {"/send", "/pipe", "/kill"} and len(words) == 2:
+            if value.endswith(" "):
+                return []
+            prefix = words[1].casefold()
+            candidates = [(agent.config.name, f"{agent.status.value} agent") for agent in self.manager.agents]
+            if words[0] == "/kill":
+                candidates.append(("all", "all connected agents"))
+            return [(name, description) for name, description in candidates if name.casefold().startswith(prefix)]
         token = value.rsplit(" ", 1)[-1]
         is_new_path = value.startswith("/new ") and value.count(" ") >= 2
         if not (is_new_path or token.startswith(("/", "./", "../", "~"))):
@@ -958,6 +976,9 @@ class CyberdeckApp(App[None]):
         elif command == "/path": self._write_local(str(self._active_agent().config.working_directory if self._active_agent() else Path.cwd()))
         elif command == "/agent": self.action_agent_control()
         elif command == "/dispatch": self.action_dispatch()
+        elif command == "/copy": self._copy_command(args)
+        elif command in {"/send", "/pipe"}: self._route_command(command, args)
+        elif command == "/kill": self._request_kill(args)
         elif command in {"/rename", "/interrupt", "/retry", "/disconnect", "/archive"}:
             state = self._active_agent()
             if not state: self._write_local("No active uplink.")
@@ -965,6 +986,99 @@ class CyberdeckApp(App[None]):
             else: self._control_result(state, (command[1:], args[0] if args else None))
         elif command in {"/quit", "/exit"}: self.exit()
         else: self._write_local(f"unknown local command: {command} (try /help)")
+
+    def _copy_command(self, args: list[str]) -> None:
+        state = self._active_agent()
+        if args and args[0].casefold() == "all":
+            entries = state.transcript if state else self._system_transcript
+            text = "\n\n".join(f"{entry.role.upper()}: {entry.text}" for entry in entries)
+        elif args:
+            text = " ".join(args)
+        else:
+            entries = state.transcript if state else self._system_transcript
+            latest = next((entry for entry in reversed(entries) if entry.role == "assistant"), None)
+            if not latest:
+                self._write_local("nothing to copy: no assistant response"); return
+            text = latest.text
+        if not text:
+            self._write_local("nothing to copy"); return
+        self.copy_to_clipboard(text)
+        self._write_local(f"copied {len(text)} characters to clipboard")
+
+    def _find_agent(self, callsign: str) -> AgentState | None:
+        name = callsign.casefold()
+        return next((agent for agent in self.manager.agents if agent.config.name.casefold() == name), None)
+
+    def _route_command(self, command: str, args: list[str]) -> None:
+        usage = f"usage: {command} CALLSIGN" + (" MESSAGE" if command == "/send" else "")
+        if not args:
+            self._write_local(usage); return
+        target = self._find_agent(args[0])
+        if not target:
+            self._write_local(f"unknown callsign: {args[0]}"); return
+        if target.status is not AgentStatus.READY:
+            self._write_local(f"{target.config.name} is {target.status.value.upper()}; requires READY"); return
+        if command == "/send":
+            payload = " ".join(args[1:]).strip()
+            if not payload:
+                self._write_local(usage); return
+        else:
+            source = self._active_agent()
+            latest = next(
+                (entry for entry in reversed(source.transcript) if entry.role == "assistant"),
+                None,
+            ) if source else None
+            if not latest:
+                self._write_local("nothing to pipe: no assistant response"); return
+            payload = latest.text
+        self._send_to_agent(target, payload, command[1:])
+
+    @work(exclusive=False)
+    async def _send_to_agent(self, target: AgentState, payload: str, verb: str) -> None:
+        try:
+            await self.manager.send(target, payload)
+            self._write_local(f"{verb} transmitted to {target.config.name}")
+        except Exception as exc:  # noqa: BLE001
+            target.status = AgentStatus.ERROR
+            target.current_activity = f"{verb} failed"
+            target.error_message = str(exc)
+            self._write_local(f"{verb} failed for {target.config.name}: {exc}")
+        self._refresh_all()
+
+    def _request_kill(self, args: list[str]) -> None:
+        if args and args[0].casefold() == "all":
+            targets = list(self.manager.agents)
+        elif args:
+            target = self._find_agent(args[0])
+            if not target:
+                self._write_local(f"unknown callsign: {args[0]}"); return
+            targets = [target]
+        else:
+            active = self._active_agent()
+            targets = [active] if active else []
+        if not targets:
+            self._write_local("no agents to kill"); return
+        names = ", ".join(agent.config.name for agent in targets)
+        self.push_screen(
+            ConfirmScreen(
+                "KILL UPLINK" if len(targets) == 1 else "KILL ALL UPLINKS",
+                f"Disconnect {names}? Threads remain restorable through Archive Uplink.",
+            ),
+            lambda yes: self._kill_agents(targets) if yes else None,
+        )
+
+    @work(exclusive=False)
+    async def _kill_agents(self, targets: list[AgentState]) -> None:
+        results: list[str] = []
+        for target in targets:
+            try:
+                await self.manager.disconnect(target)
+                results.append(f"{target.config.name}: KILLED")
+            except Exception as exc:  # noqa: BLE001
+                results.append(f"{target.config.name}: FAILED // {exc}")
+        self._sync_agent_list()
+        self._write_local("KILL SUMMARY\n" + "\n".join(results))
+        self._refresh_all()
 
     @work(exclusive=False)
     async def _load_older(self, state: AgentState) -> None:

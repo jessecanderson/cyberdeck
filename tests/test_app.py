@@ -4,13 +4,14 @@ import pytest
 
 from cyberdeck.app import (
     AgentSwitcher,
+    ConfirmScreen,
     CyberdeckApp,
     DispatchScreen,
     FirewallRequest,
     OperativeControl,
     RestoreScreen,
 )
-from cyberdeck.domain import AgentConfig, AgentState, AgentStatus
+from cyberdeck.domain import AgentConfig, AgentState, AgentStatus, TranscriptEntry
 from cyberdeck.providers import AgentEvent
 
 
@@ -22,6 +23,7 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#prompt").disabled is False
         assert pilot.app.query_one("#top-rail") is not None
         assert pilot.app.query_one("#conversation") is not None
+        assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
 
 
 @pytest.mark.asyncio
@@ -134,10 +136,51 @@ async def test_prompt_history_restores_newest_draft() -> None:
 
 def test_lifecycle_and_dispatch_commands_are_autocompletable() -> None:
     app = CyberdeckApp(skip_boot=True)
-    expected = {"/agent", "/rename", "/interrupt", "/retry", "/disconnect", "/archive", "/dispatch"}
+    expected = {"/agent", "/rename", "/interrupt", "/retry", "/disconnect", "/archive", "/dispatch", "/copy", "/send", "/pipe", "/kill"}
     assert expected <= set(app.LOCAL_COMMANDS)
 
 
 def test_prompt_completion_ignores_unresolvable_tilde_token() -> None:
     app = CyberdeckApp(skip_boot=True)
     assert app._complete("Create me a test.txt doc in ~d") == []
+
+
+def test_agent_commands_complete_callsigns_and_kill_all() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+    app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+    assert app._complete("/send gh") == [("Ghost", "ready agent")]
+    assert app._complete("/pipe ci") == [("Cipher", "ready agent")]
+    assert ("all", "all connected agents") in app._complete("/kill a")
+
+
+@pytest.mark.asyncio
+async def test_copy_defaults_to_latest_assistant_response() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend([
+            TranscriptEntry("assistant", "first"),
+            TranscriptEntry("user", "next"),
+            TranscriptEntry("assistant", "latest"),
+        ])
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app.copy_to_clipboard = copied.append
+        await pilot.app._run_local_command("/copy")
+        assert copied == ["latest"]
+
+
+@pytest.mark.asyncio
+async def test_kill_requires_confirmation() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(state, select=True)
+        await pilot.app._run_local_command("/kill ghost")
+        assert isinstance(pilot.app.screen, ConfirmScreen)
+        assert state in pilot.app.manager.agents
+        await pilot.press("n")
+        assert state in pilot.app.manager.agents
+        await pilot.app._run_local_command("/kill ghost")
+        await pilot.press("y")
+        await pilot.pause()
+        assert state not in pilot.app.manager.agents

@@ -19,7 +19,7 @@ Screen { background: $void; color: #cce7ed; }
 #deck-clock { width: 1fr; height: 1; color: $cyan; text-style: bold; content-align: right top; }
 #workspace { height: 1fr; }
 #sidebar { width: 34; min-width: 26; background: #04070d; border-right: solid #28303b; }
-#sidebar-title { height: 3; padding: 1 2; color: $cyan; text-style: bold; }
+#sidebar-title { width: 100%; height: 3; padding: 1 0; color: $cyan; text-style: bold; content-align: center middle; }
 #agents { height: 1fr; background: transparent; }
 #agents > ListItem { height: 3; padding: 0 2; color: $muted; }
 #agents > ListItem.--highlight { background: #07131d; color: $cyan; border-left: thick $cyan; }
