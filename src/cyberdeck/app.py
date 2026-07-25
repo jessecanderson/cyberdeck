@@ -470,16 +470,15 @@ class TerminalMessage(Static):
     def render(self):
         entry, state = self.entry, self.agent
         time = entry.created_at.strftime("%H:%M:%S")
-        path = CyberdeckApp.display_path(state.config.working_directory) if state else "local"
         if entry.role == "user" and state:
-            identity, style = f"{getpass.getuser()}@{state.config.name}:{path} $", "bold #00f5ff"
+            identity, style = "YOU ▶", "bold #e62acb"
         elif entry.role == "assistant" and state:
-            identity, style = f"{state.config.name}@codex:{path} $", "bold #ff2bd6"
+            identity, style = f"{state.config.name.upper()} ▶", "bold #cce7ed"
         else:
-            identity, style = "local@deck:~ $", "bold #59ff9a"
+            identity, style = "SYS ▶", "bold #e9b949"
         lines = entry.text.splitlines() or [""]
         structured = len(lines) > 1 and lines[0].lstrip().startswith(("```", "#", "- ", "* "))
-        prefix = Text(f"{time} ", style="#63708a"); prefix.append(identity, style=style)
+        prefix = Text(f"{time} ", style="bold #72d900"); prefix.append(identity, style=style)
         prefix.append("" if structured else f" {lines[0]}", style="#d7faff")
         if len(lines) == 1:
             return prefix
@@ -562,9 +561,9 @@ class CyberdeckApp(App[None]):
             yield Static(id="deck-clock")
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar"):
-                yield Label("UPLINK DIRECTORY", id="sidebar-title")
+                yield Label("──── AGENTS ────", id="sidebar-title")
                 yield ListView(id="agents")
-                yield Static("^N NEW  ^R ARCHIVE", id="spawn-hint")
+                yield Static("^N NEW\n^P MATRIX", id="spawn-hint")
             with Vertical(id="main-panel"):
                 with Vertical(id="agent-header"), Horizontal(id="agent-primary"):
                     yield Static("NO ACTIVE UPLINK", id="agent-name")
@@ -579,9 +578,11 @@ class CyberdeckApp(App[None]):
                     yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
                     yield ListView(id="operations-list")
                 yield Static(id="autocomplete")
-                with Horizontal(id="prompt-bar"):
-                    yield Static("local@deck:~ $", id="prompt-prefix")
-                    yield Input(placeholder="/help", id="prompt")
+                with Vertical(id="prompt-zone"):
+                    yield Static("▶ DECK://", id="prompt-label")
+                    with Horizontal(id="prompt-bar"):
+                        yield Static("local@deck:~ $", id="prompt-prefix")
+                        yield Input(placeholder="jack in... type a command or message", id="prompt")
         yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^O OPS  ^Q QUIT", id="shortcut-rail")
 
     def on_mount(self) -> None:
@@ -1015,10 +1016,27 @@ class CyberdeckApp(App[None]):
             item.query_one(Label).update(self._agent_label(state))
 
     @staticmethod
-    def _agent_label(state: AgentState) -> str:
-        glyph = {AgentStatus.READY: "●", AgentStatus.RESTORING: "↻", AgentStatus.ERROR: "!", AgentStatus.FIREWALL_HOLD: "!"}.get(state.status, "◐")
-        unread = f"  +{state.unread_count}" if state.unread_count else ""
-        return f"{glyph} {state.config.name}{unread}\n  {state.status.value.upper()} // {state.config.working_directory.name}"
+    def _agent_label(state: AgentState) -> Text:
+        color = {
+            AgentStatus.READY: "#52e891",
+            AgentStatus.ERROR: "#ff3b4f",
+            AgentStatus.FIREWALL_HOLD: "#ff3b4f",
+            AgentStatus.RESTORING: "#e9b949",
+        }.get(state.status, "#e62acb")
+        glyph = {
+            AgentStatus.READY: "●",
+            AgentStatus.RESTORING: "↻",
+            AgentStatus.ERROR: "!",
+            AgentStatus.FIREWALL_HOLD: "!",
+        }.get(state.status, "◐")
+        label = Text()
+        label.append(f"{glyph} ", style=f"bold {color}")
+        label.append(f"SYN::{state.config.name.upper()}", style=f"bold {color}")
+        if state.unread_count:
+            label.append(f"  +{state.unread_count}", style="bold #e9b949")
+        label.append(f"  {state.status.value}", style="#7a879a")
+        label.append(f"\n  └─ {state.config.working_directory.name}", style="#46566c")
+        return label
 
     @staticmethod
     def display_path(path: Path) -> str:

@@ -18,17 +18,17 @@ Screen { background: $void; color: #cce7ed; }
 #uplink-count { width: auto; height: 1; margin-left: 8; color: $cyan; text-style: bold; }
 #deck-clock { width: 1fr; height: 1; color: $cyan; text-style: bold; content-align: right top; }
 #workspace { height: 1fr; }
-#sidebar { width: 31; min-width: 24; background: #060b12; border-right: solid #153244; }
-#sidebar-title { height: 3; padding: 1 2; color: $magenta; text-style: bold; }
+#sidebar { width: 34; min-width: 26; background: #04070d; border-right: solid #28303b; }
+#sidebar-title { height: 3; padding: 1 2; color: $cyan; text-style: bold; }
 #agents { height: 1fr; background: transparent; }
-#agents > ListItem { height: 3; padding: 0 1; color: $muted; }
-#agents > ListItem.--highlight { background: #0d2632; color: $cyan; border-left: thick $magenta; }
-#spawn-hint { height: 2; padding: 0 2; color: $muted; border-top: solid #153244; content-align: left middle; }
+#agents > ListItem { height: 3; padding: 0 2; color: $muted; }
+#agents > ListItem.--highlight { background: #07131d; color: $cyan; border-left: thick $cyan; }
+#spawn-hint { height: 3; padding: 0 2; color: $muted; border-top: solid #28303b; content-align: left middle; }
 
 #main-panel { width: 1fr; min-width: 0; background: $void; }
 #agent-header {
-    height: 2; padding: 0 2; background: $surface; color: $cyan;
-    border-bottom: solid #153244;
+    height: 3; padding: 1 2 0 2; background: #050812; color: $cyan;
+    border-bottom: solid #6b145f;
 }
 #agent-primary { width: 100%; height: 1; }
 #agent-name, #agent-state { width: auto; height: 1; color: $cyan; text-style: bold; }
@@ -36,8 +36,8 @@ Screen { background: $void; color: #cce7ed; }
 #agent-network { width: auto; height: 1; margin-left: 3; color: $green; text-style: bold; }
 #agent-mnem { width: auto; height: 1; margin-left: 3; color: $green; text-style: bold; }
 #agent-cwd { width: 1fr; height: 1; margin-left: 3; color: $cyan; content-align: right top; }
-#conversation { height: 1fr; padding: 1 2; scrollbar-color: $magenta; scrollbar-background: $surface; }
-TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 1; color: #cce7ed; }
+#conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid #151c30; scrollbar-color: $magenta; scrollbar-background: $surface; }
+TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: #cce7ed; }
 .load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
 
 #operations-console { height: 10; background: #050b11; border-top: solid #1a4052; }
@@ -55,7 +55,9 @@ TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 1; co
     border-top: solid #153244;
     color: $muted;
 }
-#prompt-bar { height: 3; padding: 1 2 0 2; background: #071019; border-top: solid #153244; }
+#prompt-zone { height: 5; padding: 0 1; background: #03060b; }
+#prompt-label { height: 1; color: $cyan; text-style: bold; }
+#prompt-bar { height: 3; padding: 0 1; background: #060b13; border: tall $cyan; }
 #prompt-prefix { width: auto; height: 1; color: $cyan; text-style: bold; content-align: left top; }
 #prompt { width: 1fr; height: 1; border: none; background: transparent; padding: 0 1; content-align: left top; }
 #prompt:focus { border: none; }
