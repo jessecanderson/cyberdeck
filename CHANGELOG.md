@@ -3,7 +3,7 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.2.1] - Unreleased
+## [0.2.1] - 2026-07-25
 
 ### Added
 
@@ -71,6 +71,6 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
-[0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...HEAD
+[0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jessecanderson/cyberdeck/releases/tag/v0.1.0
