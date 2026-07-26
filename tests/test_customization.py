@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from cyberdeck.app import CyberdeckApp
-from cyberdeck.config import ConfigStore, DeckConfig
+from cyberdeck.config import ConfigStore, DeckConfig, RuntimeConfig
 from cyberdeck.journal import JournalStore
 from cyberdeck.modules import ModuleInputMode
 from cyberdeck.themes import import_theme, load_theme
@@ -36,6 +36,41 @@ def test_config_round_trip(tmp_path: Path) -> None:
     expected = DeckConfig("afterglow", "journal", tmp_path / "notes")
     store.save(expected)
     assert store.load() == expected
+
+
+def test_config_round_trip_preserves_runtime_definitions(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    expected = DeckConfig(
+        default_runtime="work-agent",
+        runtimes=(
+            RuntimeConfig(
+                "work-agent",
+                "Work ACP",
+                ("work-agent", "--acp"),
+                ("WORK_AGENT_PROFILE",),
+            ),
+        ),
+    )
+
+    store.save(expected)
+
+    assert store.load() == expected
+
+
+def test_config_ignores_reserved_runtime_override_without_losing_preferences(
+    tmp_path: Path,
+) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text(
+        '[deck]\ntheme = "afterglow"\n\n[[runtimes]]\n'
+        'id = "codex"\nlabel = "Override"\ncommand = ["other"]\n',
+        encoding="utf-8",
+    )
+
+    config = store.load()
+
+    assert config.active_theme == "afterglow"
+    assert config.runtimes == ()
 
 
 def test_journal_uses_portable_daily_markdown(tmp_path: Path) -> None:

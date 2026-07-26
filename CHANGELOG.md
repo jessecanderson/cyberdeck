@@ -3,6 +3,44 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-07-26
+
+### Added
+
+- ACP v1 runtime with initialize negotiation, local stdio sessions, streaming
+  transcript boundaries, normalized tool telemetry, interruption, and explicit
+  transport-failure recovery.
+- Kiro CLI runtime with new-session and session-load lifecycle support,
+  provider-owned context restoration, model metadata, and process-tree cleanup.
+- Inline Kiro ICE gates, independent batched permission requests, and concurrent
+  approve-all handling.
+- Runtime registry with Codex and Kiro built-ins plus configurable ACP commands,
+  executable/version preflight, runtime selection, and `/runtimes` diagnostics.
+- Negotiated per-agent capability metadata used by lifecycle controls and
+  slash commands.
+
+### Changed
+
+- Generalized `/new` to `/new CALLSIGN [RUNTIME] [PATH]` while preserving the
+  earlier path-first spelling.
+- Made agent creation, retry, interruption, disconnect, kill, and dispatch
+  preserve the owning runtime in mixed Codex/Kiro sessions.
+- Keep ordinary prompt submission responsive while ACP turns and permission
+  requests remain open.
+- Render distinct ACP assistant segments as separate transcript messages,
+  including boundaries around tool calls and permission gates.
+
+### Fixed
+
+- Prevent inline permission cards and long-running ACP prompts from stealing or
+  blocking terminal input focus.
+- Reconstruct Kiro replayed transcript rows during session restoration without
+  collapsing assistant messages onto one line.
+- Stop the complete adapter-owned ACP process group so retries do not race a
+  provider session lock left behind by child processes.
+- Report malformed ACP messages and unexpected stdout closure as recoverable
+  transport failures.
+
 ## [0.2.1] - 2026-07-25
 
 ### Added
@@ -71,6 +109,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
+[0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jessecanderson/cyberdeck/releases/tag/v0.1.0

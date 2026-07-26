@@ -5,6 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from .domain import (
+    AgentCapabilities,
     AgentConfig,
     AgentState,
     AgentStatus,
@@ -15,34 +16,74 @@ from .domain import (
     TranscriptEntry,
     operation_from_item,
 )
-from .providers import AgentEvent, CodexAppServerAdapter
+from .providers import AgentAdapter, AgentEvent
+from .runtimes import RuntimePreflight, RuntimeRegistry
 
 
 class AgentManager:
     def __init__(
         self,
         on_event: Callable[[AgentState, AgentEvent], None],
-        adapter_factory: Callable[[], CodexAppServerAdapter] = CodexAppServerAdapter,
+        adapter_factory: Callable[[], AgentAdapter] | None = None,
+        adapter_factories: dict[str, Callable[[], AgentAdapter]] | None = None,
+        runtime_registry: RuntimeRegistry | None = None,
     ) -> None:
         self.agents: list[AgentState] = []
-        self._adapters: dict[str, CodexAppServerAdapter] = {}
+        self._adapters: dict[str, AgentAdapter] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._on_event = on_event
-        self._adapter_factory = adapter_factory
+        self.runtime_registry = runtime_registry or RuntimeRegistry()
+        self._adapter_factories: dict[str, Callable[[], AgentAdapter]] = {}
+        if adapter_factory:
+            self._adapter_factories["codex"] = adapter_factory
+        if adapter_factories:
+            self._adapter_factories.update(adapter_factories)
+
+    @property
+    def available_providers(self) -> tuple[str, ...]:
+        return tuple(dict.fromkeys((*self.runtime_registry.ids, *self._adapter_factories)))
+
+    def runtime_preflights(self, *, refresh: bool = False) -> tuple[RuntimePreflight, ...]:
+        rows = {row.runtime_id: row for row in self.runtime_registry.preflights(refresh=refresh)}
+        for runtime_id in self._adapter_factories:
+            rows.setdefault(
+                runtime_id,
+                RuntimePreflight(runtime_id, runtime_id.title(), True, "injected runtime"),
+            )
+        return tuple(rows[runtime_id] for runtime_id in self.available_providers)
+
+    def _new_adapter(self, provider: str) -> AgentAdapter:
+        provider = provider.casefold()
+        factory = self._adapter_factories.get(provider)
+        return factory() if factory else self.runtime_registry.create(provider)
 
     def register(
-        self, name: str, working_directory: Path, *, status: AgentStatus = AgentStatus.STARTING
+        self,
+        name: str,
+        working_directory: Path,
+        *,
+        provider: str = "codex",
+        status: AgentStatus = AgentStatus.STARTING,
     ) -> AgentState:
         if any(agent.config.name.casefold() == name.strip().casefold() for agent in self.agents):
             raise ValueError(f"Callsign already in use: {name.strip()}")
+        provider = provider.casefold()
+        if provider not in self.available_providers:
+            raise ValueError(f"Unknown agent runtime: {provider}")
         state = AgentState(
-            AgentConfig(name=name, working_directory=working_directory.resolve()), status=status
+            AgentConfig(
+                name=name,
+                working_directory=working_directory.resolve(),
+                provider=provider,
+            ),
+            status=status,
+            model_provider=provider,
         )
         self.agents.append(state)
         return state
 
     async def discover_threads(self, working_directory: Path) -> list[ThreadSummary]:
-        adapter = self._adapter_factory()
+        adapter = self._new_adapter("codex")
         rows: list[ThreadSummary] = []
         cursor: str | None = None
         try:
@@ -59,7 +100,7 @@ class AgentManager:
         return rows
 
     async def connect(self, state: AgentState) -> None:
-        adapter = self._adapter_factory()
+        adapter = self._new_adapter(state.config.provider)
         self._adapters[str(state.config.id)] = adapter
         try:
             await adapter.start(state.config.working_directory, state.config.name)
@@ -74,11 +115,16 @@ class AgentManager:
             raise ValueError("A callsign is required for unnamed threads")
         if any(agent.thread_id == summary.id for agent in self.agents):
             raise ValueError("Thread is already open in Cyberdeck")
-        state = self.register(callsign, summary.cwd, status=AgentStatus.RESTORING)
+        state = self.register(
+            callsign,
+            summary.cwd,
+            provider=summary.provider,
+            status=AgentStatus.RESTORING,
+        )
         state.thread_id = summary.id
         state.restored = True
         state.current_activity = "hydrating archived turns"
-        adapter = self._adapter_factory()
+        adapter = self._new_adapter(summary.provider)
         self._adapters[str(state.config.id)] = adapter
         try:
             page = await adapter.resume_thread(summary.id, summary.cwd)
@@ -96,10 +142,11 @@ class AgentManager:
             raise
         return state
 
-    def _finish_connect(self, state: AgentState, adapter: CodexAppServerAdapter) -> None:
+    def _finish_connect(self, state: AgentState, adapter: AgentAdapter) -> None:
         state.thread_id = adapter.thread_id
         state.model = adapter.model
         state.model_provider = adapter.model_provider
+        state.capabilities = getattr(adapter, "capabilities", AgentCapabilities())
         state.status = AgentStatus.READY
         state.current_activity = "awaiting input"
         state.error_message = None
@@ -112,20 +159,22 @@ class AgentManager:
         if self._tasks.get(key) is task:
             self._tasks.pop(key, None)
 
-    async def _failed_connect(
-        self, state: AgentState, adapter: CodexAppServerAdapter
-    ) -> None:
+    async def _failed_connect(self, state: AgentState, adapter: AgentAdapter) -> None:
         state.status = AgentStatus.ERROR
         state.current_activity = "uplink failed"
         self._adapters.pop(str(state.config.id), None)
         await adapter.stop()
 
-    async def spawn(self, name: str, working_directory: Path) -> AgentState:
-        state = self.register(name, working_directory)
+    async def spawn(
+        self, name: str, working_directory: Path, *, provider: str = "codex"
+    ) -> AgentState:
+        state = self.register(name, working_directory, provider=provider)
         await self.connect(state)
         return state
 
     async def load_older(self, state: AgentState) -> HistoryPage:
+        if not state.capabilities.history:
+            raise ValueError(f"{state.config.provider} does not expose paged history")
         if not state.history_cursor:
             return HistoryPage()
         page = await self._adapters[str(state.config.id)].list_turns(cursor=state.history_cursor)
@@ -139,6 +188,10 @@ class AgentManager:
         state.transcript.append(entry)
         state.status = AgentStatus.PROCESSING
         state.current_activity = "generating response"
+        # ACP prompt requests remain open until the turn completes. Notify the UI
+        # before awaiting provider acceptance so the operator's message is visible
+        # immediately for every transport.
+        self._on_event(state, AgentEvent("user_submitted", prompt))
         try:
             await self._adapters[str(state.config.id)].send(prompt)
         except Exception as exc:
@@ -150,6 +203,8 @@ class AgentManager:
             raise
 
     async def rename(self, state: AgentState, name: str) -> None:
+        if not state.capabilities.rename:
+            raise ValueError(f"{state.config.provider} does not support persistent rename")
         name = name.strip()
         if not name:
             raise ValueError("Callsign cannot be empty")
@@ -161,6 +216,8 @@ class AgentManager:
         state.config.name = name
 
     async def interrupt(self, state: AgentState) -> None:
+        if not state.capabilities.interrupt:
+            raise ValueError(f"{state.config.provider} does not support interruption")
         await self._adapters[str(state.config.id)].interrupt_turn()
         state.status = AgentStatus.READY
         state.current_activity = "turn interrupted"
@@ -181,10 +238,14 @@ class AgentManager:
         await self._remove(state)
 
     async def archive(self, state: AgentState) -> None:
+        if not state.capabilities.archive:
+            raise ValueError(f"{state.config.provider} does not support archiving")
         await self._adapters[str(state.config.id)].archive_thread()
         await self._remove(state)
 
     async def retry(self, state: AgentState) -> None:
+        if not state.capabilities.load_session:
+            raise ValueError(f"{state.config.provider} does not support session restore")
         if not state.thread_id:
             raise ValueError("Agent has no thread to restore")
         key = str(state.config.id)
@@ -197,7 +258,7 @@ class AgentManager:
         state.status = AgentStatus.RESTORING
         state.current_activity = "re-establishing uplink"
         state.recovery_attempts += 1
-        adapter = self._adapter_factory()
+        adapter = self._new_adapter(state.config.provider)
         self._adapters[key] = adapter
         try:
             page = await adapter.resume_thread(state.thread_id, state.config.working_directory)
@@ -217,7 +278,11 @@ class AgentManager:
     async def dispatch(self, targets: list[AgentState], prompt: str) -> dict[str, str | None]:
         if len(targets) < 2:
             raise ValueError("Dispatch requires at least two targets")
-        blocked = [f"{a.config.name} ({a.status.value.upper()})" for a in targets if a.status is not AgentStatus.READY]
+        blocked = [
+            f"{a.config.name} ({a.status.value.upper()})"
+            for a in targets
+            if a.status is not AgentStatus.READY
+        ]
         if blocked:
             raise ValueError("Unavailable targets: " + ", ".join(blocked))
         results = await asyncio.gather(
@@ -242,92 +307,117 @@ class AgentManager:
     ) -> None:
         await self._adapters[str(state.config.id)].respond_approval(request_id, decision)
         state.pending_approvals[:] = [
-            approval for approval in state.pending_approvals
-            if approval.request_id != request_id
+            approval for approval in state.pending_approvals if approval.request_id != request_id
         ]
         if not state.pending_approvals:
             state.status = AgentStatus.PROCESSING
             state.current_activity = "resuming authorized turn"
+
+    async def respond_all_approvals(
+        self, state: AgentState, decision: str = "accept"
+    ) -> list[tuple[PendingApproval, Exception | None]]:
+        """Resolve the current approval batch without conflating request identities."""
+        pending = list(state.pending_approvals)
+
+        async def respond(approval: PendingApproval) -> tuple[PendingApproval, Exception | None]:
+            try:
+                await self.respond_approval(state, approval.request_id, decision)
+            except Exception as exc:  # noqa: BLE001
+                return approval, exc
+            return approval, None
+
+        return list(await asyncio.gather(*(respond(approval) for approval in pending)))
 
     async def shutdown(self) -> None:
         await asyncio.gather(*(adapter.stop() for adapter in self._adapters.values()))
         for task in self._tasks.values():
             task.cancel()
 
-    async def _pump(self, state: AgentState, adapter: CodexAppServerAdapter) -> None:
-      try:
-        async for event in adapter.events():
-            if event.kind == "status":
-                normalized = "processing" if event.text == "working" else event.text
-                state.status = AgentStatus(normalized)
-                state.current_activity = (
-                    "generating response"
-                    if state.status is AgentStatus.PROCESSING
-                    else "awaiting input"
-                )
-            elif event.kind == "assistant_delta":
-                latest = state.transcript[-1] if state.transcript else None
-                same_message = (
-                    latest is not None
-                    and latest.role == "assistant"
-                    and (
-                        event.message_id is None
-                        or latest.source_id == event.message_id
+    async def _pump(self, state: AgentState, adapter: AgentAdapter) -> None:
+        try:
+            async for event in adapter.events():
+                if event.kind == "status":
+                    normalized = "processing" if event.text == "working" else event.text
+                    state.status = AgentStatus(normalized)
+                    state.current_activity = (
+                        "generating response"
+                        if state.status is AgentStatus.PROCESSING
+                        else "awaiting input"
                     )
-                )
-                if same_message:
-                    assert latest is not None
-                    latest.text += event.text
-                else:
-                    state.transcript.append(
-                        TranscriptEntry(
-                            "assistant",
-                            event.text,
-                            source_id=event.message_id,
+                elif event.kind == "user_replay":
+                    latest = state.transcript[-1] if state.transcript else None
+                    if latest is not None and latest.role == "user":
+                        latest.text += event.text
+                    else:
+                        state.transcript.append(TranscriptEntry("user", event.text))
+                    state.current_activity = "hydrating provider session"
+                elif event.kind == "assistant_delta":
+                    latest = state.transcript[-1] if state.transcript else None
+                    same_message = (
+                        latest is not None
+                        and latest.role == "assistant"
+                        and (event.message_id is None or latest.source_id == event.message_id)
+                    )
+                    if same_message:
+                        assert latest is not None
+                        latest.text += event.text
+                    else:
+                        state.transcript.append(
+                            TranscriptEntry(
+                                "assistant",
+                                event.text,
+                                source_id=event.message_id,
+                            )
                         )
-                    )
-                state.status = AgentStatus.PROCESSING
-                state.current_activity = "streaming response"
-            elif event.kind == "operation":
-                operation = operation_from_item(event.params or {})
-                existing = next((op for op in state.operations if op.id == operation.id), None)
-                if existing and operation.id:
-                    index = state.operations.index(existing)
-                    state.operations[index] = operation
-                else:
-                    state.operations.append(operation)
-                is_edit = operation.kind == "fileChange"
-                state.status = AgentStatus.EDITING if is_edit else AgentStatus.EXECUTING
-                state.current_activity = operation.summary
-                if event.method == "item/completed" and operation.state is OperationState.RUNNING:
-                    operation.state = OperationState.SUCCEEDED
-            elif event.kind == "approval":
-                state.status = AgentStatus.FIREWALL_HOLD
-                state.current_activity = "ICE authorization required"
-                if event.request_id is not None:
-                    state.pending_approvals.append(
-                        PendingApproval(
-                            request_id=event.request_id,
-                            method=event.method,
-                            params=event.params or {},
+                    state.status = AgentStatus.PROCESSING
+                    state.current_activity = "streaming response"
+                elif event.kind == "operation":
+                    operation = operation_from_item(event.params or {})
+                    existing = next((op for op in state.operations if op.id == operation.id), None)
+                    if existing and operation.id:
+                        index = state.operations.index(existing)
+                        state.operations[index] = operation
+                    else:
+                        state.operations.append(operation)
+                    is_edit = operation.kind == "fileChange"
+                    state.status = AgentStatus.EDITING if is_edit else AgentStatus.EXECUTING
+                    state.current_activity = operation.summary
+                    if (
+                        event.method == "item/completed"
+                        and operation.state is OperationState.RUNNING
+                    ):
+                        operation.state = OperationState.SUCCEEDED
+                elif event.kind == "approval":
+                    state.status = AgentStatus.FIREWALL_HOLD
+                    state.current_activity = "ICE authorization required"
+                    if event.request_id is not None:
+                        state.pending_approvals.append(
+                            PendingApproval(
+                                request_id=event.request_id,
+                                method=event.method,
+                                params=event.params or {},
+                            )
                         )
-                    )
-            elif event.kind == "token_usage":
-                usage = (event.params or {}).get("tokenUsage") or {}
-                last = usage.get("last") or {}
-                state.context_tokens = int(last.get("totalTokens") or 0)
-                window = usage.get("modelContextWindow")
-                state.context_window = int(window) if window else None
-            elif event.kind in {"error", "transport_closed"}:
-                state.status = AgentStatus.ERROR
-                state.current_activity = event.text
-                state.error_message = event.text
-                state.pending_approvals.clear()
-            self._on_event(state, event)
-      except asyncio.CancelledError:
-        raise
-      except Exception as exc:  # noqa: BLE001
-        state.status = AgentStatus.ERROR
-        state.current_activity = "event pump failed"
-        state.error_message = str(exc)
-        self._on_event(state, AgentEvent("error", f"event pump failed: {exc}"))
+                elif event.kind == "token_usage":
+                    usage = (event.params or {}).get("tokenUsage") or {}
+                    last = usage.get("last") or {}
+                    state.context_tokens = int(last.get("totalTokens") or 0)
+                    window = usage.get("modelContextWindow")
+                    state.context_window = int(window) if window else None
+                    state.context_percentage = None
+                elif event.kind == "context_usage":
+                    percentage = float((event.params or {}).get("percentage") or 0)
+                    state.context_percentage = max(0.0, min(100.0, percentage))
+                elif event.kind in {"error", "transport_closed"}:
+                    state.status = AgentStatus.ERROR
+                    state.current_activity = event.text
+                    state.error_message = event.text
+                    state.pending_approvals.clear()
+                self._on_event(state, event)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            state.status = AgentStatus.ERROR
+            state.current_activity = "event pump failed"
+            state.error_message = str(exc)
+            self._on_event(state, AgentEvent("error", f"event pump failed: {exc}"))

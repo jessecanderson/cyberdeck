@@ -223,11 +223,10 @@ CARRIER RELEASED // thread remains available in Archive Uplink
 - A user must be able to understand every dangerous action without knowing the
   fictional vocabulary.
 
-## Future provider topology
+## Runtime topology
 
-Version 0.2.1 labels the existing agent rail `LOCAL GRID`. Provider-specific
-grids belong to the provider/profile work planned for 0.3.0. Until then, the
-secondary agent line may identify the known provider and local connection:
+The agent rail is the `LOCAL GRID`. Its secondary line identifies the real
+runtime and local connection for each operative:
 
 ```text
 ● SYN::GHOST       ready
@@ -235,5 +234,6 @@ secondary agent line may identify the known provider and local connection:
   └─ cyberdeck
 ```
 
-Do not display Kiro, Claude, remote, trust, or signal-quality metadata until
-the corresponding integration provides real state.
+Kiro may replace `CODEX` only for a Kiro-owned ACP session. Claude, Ollama,
+remote, trust, and signal-quality metadata remain reserved until their
+corresponding integrations provide real state.
