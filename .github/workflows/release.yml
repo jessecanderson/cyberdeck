@@ -45,3 +45,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" dist/* SHA256SUMS --verify-tag --generate-notes --title "Cyberdeck $GITHUB_REF_NAME"
+      - name: Dispatch Homebrew tap update
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SOURCE_ARCHIVE="cyberdeck_tui-${VERSION}.tar.gz"
+          SOURCE_SHA256=$(awk -v archive="$SOURCE_ARCHIVE" '$2 == archive { print $1 }' SHA256SUMS)
+          test -n "$SOURCE_SHA256"
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${SOURCE_ARCHIVE}"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg tag "$GITHUB_REF_NAME" \
+            --arg source_url "$SOURCE_URL" \
+            --arg source_sha256 "$SOURCE_SHA256" \
+            '{
+              event_type: "cyberdeck_release",
+              client_payload: {
+                version: $version,
+                tag: $tag,
+                source_url: $source_url,
+                source_sha256: $source_sha256
+              }
+            }' > "$RUNNER_TEMP/homebrew-dispatch.json"
+          gh api \
+            --method POST \
+            repos/jessecanderson/homebrew-tap/dispatches \
+            --input "$RUNNER_TEMP/homebrew-dispatch.json"
