@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml)
 
-[Changelog](CHANGELOG.md) · [Releases](https://github.com/jessecanderson/cyberdeck/releases)
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/jessecanderson/cyberdeck/releases) · [Release process](docs/releases.md)
 
 A neon, keyboard-first TUI for running multiple local coding agents. The first
 provider uses the experimental Codex app-server protocol over stdio.
