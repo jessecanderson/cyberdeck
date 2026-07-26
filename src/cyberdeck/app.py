@@ -171,7 +171,11 @@ class BootScreen(Screen[None]):
 
     def _render_noise(self) -> None:
         """Repaint POST and phosphor noise into one terminal-cell surface."""
-        log = self.query_one("#boot-log", Static)
+        try:
+            log = self.query_one("#boot-log", Static)
+        except NoMatches:
+            # The boot worker may begin before the screen's children finish mounting.
+            return
         width, height = max(log.size.width - 4, 1), max(log.size.height, 1)
         visible = self._boot_output[-height:]
         rows = visible + [("", "")] * (height - len(visible))
@@ -214,7 +218,7 @@ class BootScreen(Screen[None]):
 
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
-    HELP_TEXT = """LOCAL COMMANDS
+    HELP_TEXT = """DECK COMMAND INDEX // LOCAL CONTROL
 
 /new [name] [path]   Initialize a new uplink
 /restore             Open ARCHIVE UPLINK
@@ -475,7 +479,10 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="control-dialog"):
-            yield Label(f"OPERATIVE CONTROL // {self.agent.config.name}", id="control-title")
+            yield Label(
+                f"OPERATIVE CONTROL // SYN::{self.agent.config.name.upper()}",
+                id="control-title",
+            )
             yield Input(value=self.agent.config.name, placeholder="New callsign", id="control-name")
             yield ListView(*(ListItem(Label(action.upper())) for action in self.ACTIONS), id="control-list")
             yield Static("ENTER  EXECUTE   ESC  RETURN", classes="modal-help")
@@ -511,14 +518,18 @@ class AgentSwitcher(ModalScreen[AgentState | None]):
     @on(Input.Changed, "#switch-search")
     def search(self, event: Input.Changed) -> None:
         term = event.value.casefold()
-        self.filtered = [a for a in self.agents if term in " ".join((a.config.name, a.config.working_directory.name, str(a.config.working_directory), a.status.value)).casefold()]
+        self.filtered = [a for a in self.agents if term in " ".join((a.config.name, a.model_provider, a.config.working_directory.name, str(a.config.working_directory), a.status.value)).casefold()]
         self._rebuild()
 
     def _rebuild(self) -> None:
         view = self.query_one("#switch-list", ListView); view.clear()
         for agent in self.filtered:
             active = " [ACTIVE]" if agent is self.active else ""
-            view.append(ListItem(Label(f"{agent.config.name}  {agent.status.value.upper()}{active}\n  {agent.config.working_directory}")))
+            provider = (agent.model_provider or agent.config.provider).upper()
+            view.append(ListItem(Label(
+                f"SYN::{agent.config.name.upper()}  {agent.status.value.upper()}{active}\n"
+                f"  {provider} / LOCAL  ─  {agent.config.working_directory}"
+            )))
         if self.filtered: view.index = 0
 
     def action_choose(self) -> None:
@@ -554,7 +565,10 @@ class DispatchScreen(ModalScreen[tuple[list[AgentState], str] | None]):
         view = self.query_one("#dispatch-list", ListView); view.clear()
         for agent in self.filtered:
             mark = "◆" if agent.config.id in self.selected else "◇"
-            view.append(ListItem(Label(f"{mark} {agent.config.name}  [{agent.status.value.upper()}]  {agent.config.working_directory.name}")))
+            view.append(ListItem(Label(
+                f"{mark} SYN::{agent.config.name.upper()}  "
+                f"[{agent.status.value.upper()}]  {agent.config.working_directory.name}"
+            )))
         if self.filtered: view.index = 0
 
     def action_toggle(self) -> None:
@@ -601,13 +615,26 @@ class TerminalMessage(Static):
         return Group(prefix, Padding(Markdown(markdown), (0, 0, 0, len(time) + 2)))
 
 
+class EmptyGrid(Static):
+    def render(self) -> Group:
+        return Group(
+            Text("LOCAL GRID // NO OPERATIVES", style="bold #00e8f2"),
+            Text("\nNo active constructs are mapped to this deck.", style="#607087"),
+            Text("\n\n^N  INITIALIZE UPLINK", style="bold #52e891"),
+            Text("\n^R  OPEN ARCHIVE", style="#8ba2b3"),
+            Text("\n\n待機中 // AWAITING OPERATOR", style="#283748"),
+        )
+
+
 class OperationDetail(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
     def __init__(self, operation: OperationEntry) -> None:
         super().__init__(); self.operation = operation
     def compose(self) -> ComposeResult:
         op = self.operation
-        fields = [f"TYPE       {op.kind}", f"STATE      {op.state.value}",
+        fields = ["GRID TRACE // OPERATION DETAIL", "",
+                  f"CLASS      {CyberdeckApp._trace_class(op)}",
+                  f"TYPE       {op.kind}", f"STATE      {op.state.value}",
                   f"SUMMARY    {op.summary}"]
         for label, value in (("CWD", op.cwd), ("DURATION", f"{op.duration_ms} ms" if op.duration_ms else None),
                              ("EXIT CODE", op.exit_code), ("FILES", ", ".join(op.files) or None),
@@ -961,7 +988,7 @@ class CyberdeckApp(App[None]):
         now = datetime.now().astimezone().strftime("%H:%M:%S")
         try:
             self.query_one("#uplink-count", Static).update(
-                f"UPLINKS {active:02d}/{len(self.manager.agents):02d}"
+                f"LOCAL GRID {active:02d}/{len(self.manager.agents):02d}"
             )
             self.query_one("#deck-clock", Static).update(now)
         except NoMatches:
@@ -980,6 +1007,13 @@ class CyberdeckApp(App[None]):
             self.query_one("#agent-activity", Static).update(f"│ {state.current_activity}")
             self._update_network()
             self._update_mnem(state)
+        else:
+            self.query_one("#agent-name", Static).update("NO ACTIVE CONSTRUCT")
+            self.query_one("#agent-model", Static).update("│ PROVIDER --")
+            self.query_one("#agent-state", Static).update("│ STATE OFFLINE")
+            self.query_one("#agent-activity", Static).update("│ awaiting operator")
+            self.query_one("#agent-cwd", Static).update("")
+            self._update_network()
 
     def _update_mnem(self, state: AgentState) -> None:
         meter = self.screen_stack[0].query_one("#agent-mnem", Static)
@@ -1608,7 +1642,14 @@ class CyberdeckApp(App[None]):
             operation = getattr(self.manager, action)
             await operation(state, argument) if action == "rename" else await operation(state)
             if action in {"disconnect", "archive"}: self._sync_agent_list()
-            self._write_local(f"{action} complete: {argument or state.config.name}")
+            signal = {
+                "rename": "CALLSIGN UPDATED",
+                "interrupt": "ABORT SIGNAL CONFIRMED",
+                "retry": "CARRIER REACQUIRED",
+                "disconnect": "CARRIER RELEASED",
+                "archive": "CONSTRUCT ARCHIVED",
+            }.get(action, f"{action.upper()} COMPLETE")
+            self._write_local(f"{signal} // {argument or state.config.name}")
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"{action} failed: {exc}")
         self._refresh_all()
@@ -1633,6 +1674,8 @@ class CyberdeckApp(App[None]):
         state = self._active_agent(); conversation = main.query_one("#conversation", VerticalScroll)
         conversation.remove_children()
         entries = state.transcript if state else self._system_transcript
+        if not state and not entries:
+            conversation.mount(EmptyGrid())
         if state and state.history_cursor:
             conversation.mount(Static("↑ LOAD OLDER TURNS  //  /older", classes="load-older"))
         for entry in entries: conversation.mount(TerminalMessage(entry, state))
@@ -1652,10 +1695,17 @@ class CyberdeckApp(App[None]):
         for op in state.operations:
             glyph = {"succeeded": "✓", "failed": "!", "approval": "?", "running": "◐", "pending": "○"}[op.state.value]
             trace = self._trace_class(op)
+            phase = {
+                "succeeded": "CLEAR",
+                "failed": "FAULT",
+                "approval": "INTERLOCK",
+                "running": "ACTIVE",
+                "pending": "QUEUED",
+            }[op.state.value]
             view.append(
                 ListItem(
                     Label(
-                        f"{op.created_at:%H:%M:%S}  {trace:<7} {glyph} "
+                        f"{op.created_at:%H:%M:%S}  {trace:<7} {phase:<9} {glyph} "
                         f"{op.kind:<16} {op.summary}"
                     )
                 )
@@ -2257,8 +2307,12 @@ class CyberdeckApp(App[None]):
         label = Text()
         label.append(f"{glyph} ", style=f"bold {color}")
         label.append(f"SYN::{state.config.name.upper()}", style=f"bold {color}")
-        if state.unread_count:
-            label.append(f"  +{state.unread_count}", style="bold #e9b949")
+        if state.status is AgentStatus.FIREWALL_HOLD:
+            label.append("  ATTN::ICE", style="bold #ff3b4f")
+        elif state.status is AgentStatus.ERROR:
+            label.append("  ATTN::FAULT", style="bold #ff3b4f")
+        elif state.unread_count:
+            label.append(f"  ECHO +{state.unread_count}", style="bold #e9b949")
         label.append(f"  {state.status.value}", style="#7a879a")
         provider = (state.model_provider or state.config.provider).upper()
         label.append(f"\n  ├─ {provider} / LOCAL", style="#607087")

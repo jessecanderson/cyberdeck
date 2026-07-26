@@ -13,6 +13,7 @@ from cyberdeck.app import (
     ConfirmScreen,
     CyberdeckApp,
     DispatchScreen,
+    EmptyGrid,
     OperativeControl,
     RestoreScreen,
     SpawnAgent,
@@ -41,6 +42,10 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#conversation") is not None
         assert pilot.app.query_one("#signal-trace") is not None
         assert pilot.app.query_one("#state-transition").display is False
+        assert pilot.app.query_one(EmptyGrid) is not None
+        assert "LOCAL GRID 00/00" in str(pilot.app.query_one("#uplink-count").content)
+        assert "NO ACTIVE CONSTRUCT" in str(pilot.app.query_one("#agent-name").content)
+        assert "STATE OFFLINE" in str(pilot.app.query_one("#agent-state").content)
         assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
         assert "接続" in str(pilot.app.query_one("#sidebar-title").content)
         assert "LOCAL GRID" in str(pilot.app.query_one("#sidebar-title").content)
@@ -59,6 +64,26 @@ def test_agent_label_exposes_real_local_provider_topology() -> None:
     assert "SYN::GHOST" in label
     assert "CODEX / LOCAL" in label
     assert "tmp" in label
+
+
+@pytest.mark.parametrize(
+    ("status", "unread", "attention"),
+    [
+        (AgentStatus.FIREWALL_HOLD, 0, "ATTN::ICE"),
+        (AgentStatus.ERROR, 0, "ATTN::FAULT"),
+        (AgentStatus.READY, 3, "ECHO +3"),
+    ],
+)
+def test_agent_label_surfaces_attention(
+    status: AgentStatus, unread: int, attention: str
+) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    state = AgentState(
+        AgentConfig("ghost", Path("/tmp")),
+        status=status,
+        unread_count=unread,
+    )
+    assert attention in str(app._agent_label(state))
 
 
 @pytest.mark.parametrize(
@@ -195,6 +220,32 @@ async def test_operations_console_toggles() -> None:
         assert console.display is True
         await pilot.press("ctrl+o")
         assert console.display is False
+
+
+@pytest.mark.asyncio
+async def test_grid_trace_rows_include_class_and_phase() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.operations.extend(
+            [
+                OperationEntry("commandExecution", "pytest", OperationState.RUNNING),
+                OperationEntry("fileChange", "app.py", OperationState.SUCCEEDED),
+            ]
+        )
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app._render_active()
+        await pilot.pause()
+        labels = [str(label.content) for label in pilot.app.query("#operations-list Label")]
+        assert any("TRACE" in label and "ACTIVE" in label for label in labels)
+        assert any("PATCH" in label and "CLEAR" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_grid_layout_survives_narrow_terminal() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        assert pilot.app.query_one("#sidebar").size.width >= 26
+        assert pilot.app.query_one(EmptyGrid) is not None
 
 
 @pytest.mark.asyncio

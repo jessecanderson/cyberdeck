@@ -46,12 +46,13 @@ Screen { background: $void; color: $foreground; }
 }
 #conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid $panel-lighten-1; scrollbar-color: $magenta; scrollbar-background: $surface; }
 TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: $foreground; }
+EmptyGrid { width: 100%; height: 1fr; padding: 4 6; content-align: center middle; }
 .load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
 
-#operations-console { height: 10; background: $surface; border-top: solid $primary-muted; }
+#operations-console { height: 11; background: $surface; border-top: solid $primary-muted; }
 #operations-title { height: 2; padding: 0 2; color: $cyan; text-style: bold; content-align: left middle; }
 #operations-list { height: 1fr; background: transparent; }
-#operations-list > ListItem { height: 1; padding: 0 2; color: $muted; }
+#operations-list > ListItem { height: 1; padding: 0 2; color: #708396; }
 #operations-list > ListItem.--highlight { background: $primary-muted; color: $foreground; }
 
 #autocomplete {
