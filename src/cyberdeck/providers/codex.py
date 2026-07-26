@@ -7,7 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from .. import __version__
-from ..domain import HistoryPage, ThreadSummary, map_history_turns, parse_timestamp
+from ..domain import (
+    AgentCapabilities,
+    HistoryPage,
+    ThreadSummary,
+    map_history_turns,
+    parse_timestamp,
+)
 from .base import AgentEvent
 
 # JSON-RPC messages are newline-delimited and can contain large tool or agent payloads.
@@ -35,6 +41,16 @@ class CodexAppServerAdapter:
         self.cwd: Path | None = None
         self.model: str | None = None
         self.model_provider: str = "codex"
+        self.capabilities = AgentCapabilities(
+            load_session=True,
+            history=True,
+            rename=True,
+            archive=True,
+            interrupt=True,
+            approvals=True,
+            tool_events=True,
+            model_selection=True,
+        )
         self._intentional_shutdown = False
 
     async def _initialize(self, working_directory: Path) -> Path:

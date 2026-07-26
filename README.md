@@ -4,8 +4,10 @@
 
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/jessecanderson/cyberdeck/releases) · [Release process](docs/releases.md)
 
-A neon, keyboard-first TUI for running multiple local coding agents. The first
-provider uses the experimental Codex app-server protocol over stdio.
+A neon, keyboard-first TUI for running multiple local coding agents. Cyberdeck
+supports Codex through its native App Server transport and Kiro through ACP v1,
+both over local stdio transports. Codex remains on App Server while the shared
+ACP runtime provides the extension point for compatible agent commands.
 
 The interface uses a restrained, original ODS cyberdeck vocabulary: open agents
 occupy the Local Grid, normalized activity appears in the Grid Trace, permission
@@ -33,16 +35,25 @@ autosave, search, themes, and mixed English/Japanese writing.
 
 - Homebrew on macOS for the recommended installation (Python is installed as
   a formula dependency)
-- `codex` installed and authenticated (`codex login`)
+- At least one supported provider CLI installed and authenticated:
+  - Codex: `codex login`
+  - Kiro: `kiro-cli login`
 - Python 3.11+ only when installing from source or with pipx
 
 ## Install
 
-First, install the Codex CLI, authenticate it, and verify that it is available:
+First, install and authenticate at least one provider CLI. For Codex:
 
 ```bash
 codex login
 codex --version
+```
+
+For Kiro:
+
+```bash
+kiro-cli login
+kiro-cli --version
 ```
 
 The recommended installation uses the public Cyberdeck Homebrew tap. Homebrew
@@ -105,8 +116,10 @@ pipx uninstall cyberdeck-tui
 
 ## Usage
 
-Press `Ctrl+N` to spawn an agent, choose a callsign and working directory, then
-enter a prompt. Cyberdeck stores that callsign on the Codex thread itself.
+Press `Ctrl+N` to spawn an agent, choose a callsign, runtime, and working
+directory, then enter a prompt. Cyberdeck stores Codex callsigns on the Codex
+thread itself; ACP provider capabilities determine whether other providers can
+persist names.
 `Ctrl+R` opens the manual Archive Uplink, where non-archived interactive Codex
 threads can be searched, multi-selected, and restored. `Ctrl+J` and `Ctrl+K`
 cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix. Unsent
@@ -119,9 +132,38 @@ agents.
 
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
 the active module. Start with `/help`; current commands include `/new`,
-`/restore`, `/agents`, `/agent`, `/rename`, `/interrupt`, `/retry`,
+`/restore`, `/agents`, `/runtimes`, `/agent`, `/rename`, `/interrupt`, `/retry`,
 `/disconnect`, `/archive`, `/dispatch`, `/module`, `/theme`, `/journal`,
 `/older`, `/clear`, `/path`, and `/quit`.
+
+The canonical `/new` form puts the runtime before the optional path:
+
+```text
+/new ghost
+/new ghost kiro
+/new ghost /path/to/project
+/new ghost codex /path/to/project
+/new ghost kiro /path/to/project
+```
+
+Both runtime and path are optional. The configured default runtime (`codex` on
+a fresh install) and current working directory are used when omitted.
+Autocomplete suggests runtime IDs after the callsign and directories after the
+runtime. The earlier `/new ghost /path/to/project kiro` spelling remains
+accepted for compatibility. Run `/runtimes` to inspect executable availability
+and versions before opening an uplink.
+
+Kiro ACP sessions can be resumed in a fresh Kiro process when the provider
+advertises `loadSession`. Kiro retains its provider-owned model context and
+replays prior user and assistant messages as ACP session updates. Cyberdeck
+reconstructs transcript rows from that replay because ACP v1 does not return a
+structured history page from `session/load`.
+
+Runtime capabilities are negotiated per connection. Unsupported lifecycle
+actions remain visible in Operative Control but are marked unavailable, and
+slash-command attempts fail without sending an invalid protocol request. See
+[Agent runtimes](docs/runtimes.md) for custom ACP commands, configuration,
+preflight behavior, and current provider limitations.
 
 ## Deck modules
 
@@ -183,7 +225,7 @@ or invalid at startup, Cyberdeck visibly falls back to ODS Nightwave.
 
 ## Current scope
 
-- Multiple independent new or restored Codex app-server processes
+- Multiple independent Codex App Server and local ACP agent processes
 - Searchable, multi-select restoration with 50-turn history pagination
 - Terminal-style Markdown conversation rendering with durable timestamps
 - Toggleable normalized command/file/tool operations console (`Ctrl+O`)
@@ -193,10 +235,10 @@ or invalid at startup, Cyberdeck visibly falls back to ODS Nightwave.
 - Inline, risk-tiered ICE gates for command and file-change approvals
 - Explicit transport-failure visibility and resume-based recovery
 - Guarded concurrent dispatch with per-target partial-failure reporting
-- Clean provider boundary for future ACP and other agent backends
+- Negotiated runtime capabilities and configurable local ACP commands
 
-Codex `app-server` is experimental. The adapter deliberately contains all
-protocol-specific behavior so changes do not leak into the UI.
+The Codex adapter deliberately contains all App Server-specific behavior so
+protocol changes do not leak into the runtime-neutral manager or UI.
 
 ## Provenance
 

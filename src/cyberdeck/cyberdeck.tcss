@@ -114,11 +114,12 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #spawn-dialog, #help-dialog, #restore-dialog {
     width: 76; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
-#spawn-dialog { height: 15; }
-#spawn-agent-name, #spawn-agent-path {
+#spawn-dialog { height: 28; }
+#spawn-agent-name, #spawn-agent-path, #spawn-provider {
     width: 100%; height: 3; margin-top: 1; border: tall #1a4052; background: #071019;
 }
-#spawn-agent-name:focus, #spawn-agent-path:focus { border: tall $cyan; }
+#spawn-agent-name:focus, #spawn-agent-path:focus, #spawn-provider:focus { border: tall $cyan; }
+#spawn-runtimes { height: 5; margin-top: 1; color: $muted; }
 #help-dialog { height: 32; }
 #restore-dialog { width: 100; height: 80%; border: double $magenta; }
 #spawn-title, #help-title, #restore-title { height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244; }
@@ -129,7 +130,6 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #restore-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #restore-help, .modal-help { height: 2; color: $muted; content-align: center middle; }
 .approval-message { width: 78; max-width: 94%; height: auto; margin: 1 0 1 10; background: #09070d; }
-.approval-message:focus { background: #160710; }
 #operation-detail { width: 90%; height: 85%; padding: 2 3; background: #050b14; border: tall $cyan; }
 #confirm-dialog, #control-dialog, #switch-dialog, #dispatch-dialog {
     width: 78; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;

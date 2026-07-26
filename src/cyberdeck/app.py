@@ -10,6 +10,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from importlib.metadata import version as package_version
@@ -56,6 +57,7 @@ from .modules import (
     validate_manifest,
 )
 from .providers import AgentEvent
+from .runtimes import RuntimePreflight, RuntimeRegistry
 from .themes import DeckTheme, discover_themes, import_theme
 
 
@@ -221,7 +223,8 @@ class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
     HELP_TEXT = """DECK COMMAND INDEX // LOCAL CONTROL
 
-/new [name] [path]   Initialize a new uplink
+/new CALLSIGN [RUNTIME] [PATH]   Initialize an uplink (defaults: configured runtime, current path)
+  e.g. /new ghost  •  /new ghost kiro ~/src/project
 /restore             Open ARCHIVE UPLINK
 /agents              List connected uplinks
 /agent               Open OPERATIVE CONTROL
@@ -233,6 +236,9 @@ class HelpScreen(ModalScreen[None]):
 /pipe AGENT           Forward the latest agent response
 /copy [all|TEXT]      Copy response, transcript, or text
 /kill [AGENT|all]     Disconnect after confirmation
+/approve [all]        Approve latest or all pending ICE requests once
+/trust                Trust the latest ICE request for this session
+/deny                 Deny the latest ICE request
 /modules             List bundled and external deck modules
 /module NAME         Switch to an enabled deck module
 /module ACTION ARG   Install, link, update, enable, disable, or remove
@@ -290,7 +296,11 @@ class AboutScreen(ModalScreen[None]):
 def ice_level(agent: AgentState, approval: PendingApproval) -> tuple[str, str]:
     """Classify an approval for display; the provider remains the authority."""
     params = approval.params
-    command = str(params.get("command") or "").casefold()
+    tool_call = params.get("toolCall") if isinstance(params.get("toolCall"), dict) else {}
+    raw_input = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
+    command = str(
+        params.get("command") or raw_input.get("command") or tool_call.get("title") or ""
+    ).casefold()
     dangerous = (
         "rm -rf", "sudo ", "git reset --hard", "git clean -f", "mkfs",
         "dd if=", "chmod -r", "chown -r", "> /dev/",
@@ -311,13 +321,7 @@ def ice_level(agent: AgentState, approval: PendingApproval) -> tuple[str, str]:
 
 
 class ApprovalMessage(Static):
-    can_focus = True
-    BINDINGS: ClassVar = [
-        ("y", "authorize", "Open once"),
-        ("a", "trust", "Trust session"),
-        ("n", "deny", "Seal"),
-        ("escape", "release", "Return"),
-    ]
+    can_focus = False
 
     def __init__(self, agent: AgentState, approval: PendingApproval) -> None:
         self.agent, self.approval = agent, approval
@@ -326,19 +330,34 @@ class ApprovalMessage(Static):
 
     def render(self):
         params = self.approval.params
+        tool_call = params.get("toolCall") if isinstance(params.get("toolCall"), dict) else {}
+        raw_input = tool_call.get("rawInput") if isinstance(tool_call.get("rawInput"), dict) else {}
+        options = [
+            option for option in params.get("options") or [] if isinstance(option, dict)
+        ]
         level, color = ice_level(self.agent, self.approval)
         is_command = self.approval.method == "item/commandExecution/requestApproval"
         details = Text()
         for label, value in (
             ("OPERATIVE", self.agent.config.name.upper()),
-            ("ACTION", "EXECUTE COMMAND" if is_command else "MODIFY FILES"),
-            ("TARGET", params.get("command") or params.get("grantRoot") or "workspace files"),
+            ("ACTION", tool_call.get("title") or ("EXECUTE COMMAND" if is_command else "MODIFY FILES")),
+            ("TARGET", params.get("command") or raw_input.get("command") or params.get("grantRoot") or "workspace files"),
             ("PATH", params.get("cwd") or str(self.agent.config.working_directory)),
             ("REASON", params.get("reason") or "Agent operation requires authorization"),
         ):
             details.append(f"{label:<10}", style=f"bold {color}")
             details.append(f"{value}\n", style="#f4d8dc")
-        actions = Text("[Y] OPEN ONCE   [A] TRUST SESSION   [N] SEAL", style=f"bold {color}")
+        if options:
+            offered = ", ".join(
+                str(option.get("name") or option.get("kind") or option.get("optionId"))
+                for option in options
+            )
+            details.append(f"{'OPTIONS':<10}", style=f"bold {color}")
+            details.append(f"{offered}\n", style="#f4d8dc")
+        actions = Text(
+            "/approve   /trust   /deny   /approve all",
+            style=f"bold {color}",
+        )
         actions.justify = "center"
         return Panel(
             Group(details, Text(""), actions),
@@ -348,36 +367,64 @@ class ApprovalMessage(Static):
             padding=(0, 1),
         )
 
-    def _decide(self, decision: str) -> None:
-        self.disabled = True
-        self.app._approval_decided(self.agent, self.approval, decision)
-        self.app.query_one("#prompt", Input).focus()
-
-    def action_authorize(self) -> None: self._decide("accept")
-    def action_trust(self) -> None: self._decide("acceptForSession")
-    def action_deny(self) -> None: self._decide("decline")
-    def action_release(self) -> None: self.app.query_one("#prompt", Input).focus()
-
-
-class SpawnAgent(ModalScreen[tuple[str, Path] | None]):
+class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
     BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+
+    def __init__(
+        self,
+        runtimes: tuple[RuntimePreflight, ...] = (),
+        default_runtime: str = "codex",
+    ) -> None:
+        super().__init__()
+        self.runtimes = runtimes or (
+            RuntimePreflight("codex", "Codex", True, "built-in"),
+            RuntimePreflight("kiro", "Kiro", True, "built-in"),
+        )
+        self.default_runtime = default_runtime
 
     def compose(self) -> ComposeResult:
         with Vertical(id="spawn-dialog"):
             yield Label("ODS // INITIALIZE UPLINK", id="spawn-title")
             yield Input(placeholder="Callsign", id="spawn-agent-name")
             yield Input(value=str(Path.cwd()), placeholder="Working directory", id="spawn-agent-path")
-            yield Static("ENTER  JACK IN   •   ESC  ABORT", classes="modal-help", id="spawn-help")
+            yield Input(
+                value=self.default_runtime,
+                placeholder="Runtime ID",
+                id="spawn-provider",
+            )
+            yield Static(
+                "\n".join(
+                    f"{'●' if row.available else '×'} {row.runtime_id:<12} "
+                    f"{row.label} // {row.version or row.detail}"
+                    for row in self.runtimes
+                ),
+                id="spawn-runtimes",
+            )
+            yield Static(
+                f"ENTER  JACK IN   •   DEFAULT {self.default_runtime.upper()}   •   ESC  ABORT",
+                classes="modal-help",
+                id="spawn-help",
+            )
 
     @on(Input.Submitted)
     def submit(self) -> None:
         name = self.query_one("#spawn-agent-name", Input).value.strip()
         path = Path(self.query_one("#spawn-agent-path", Input).value).expanduser().resolve()
+        provider = self.query_one("#spawn-provider", Input).value.strip().casefold()
         if not name:
             self.query_one("#spawn-agent-name", Input).focus(); return
         if not path.is_dir():
             self.query_one("#spawn-help", Static).update("PATH NOT FOUND // RETRY"); return
-        self.dismiss((name, path))
+        runtime = next((row for row in self.runtimes if row.runtime_id == provider), None)
+        if runtime is None:
+            self.query_one("#spawn-help", Static).update("UNKNOWN RUNTIME // SELECT LISTED ID")
+            self.query_one("#spawn-provider", Input).focus(); return
+        if not runtime.available:
+            self.query_one("#spawn-help", Static).update(
+                f"RUNTIME UNAVAILABLE // {runtime.detail}"
+            )
+            return
+        self.dismiss((name, path, provider))
 
     def action_cancel(self) -> None: self.dismiss(None)
 
@@ -489,8 +536,17 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
                 id="control-title",
             )
             yield Input(value=self.agent.config.name, placeholder="New callsign", id="control-name")
-            yield ListView(*(ListItem(Label(action.upper())) for action in self.ACTIONS), id="control-list")
-            yield Static("ENTER  EXECUTE   ESC  RETURN", classes="modal-help")
+            yield ListView(
+                *(
+                    ListItem(Label(
+                        action.upper()
+                        + ("" if self.agent.capabilities.supports(action) else "  [UNAVAILABLE]")
+                    ))
+                    for action in self.ACTIONS
+                ),
+                id="control-list",
+            )
+            yield Static("ENTER  EXECUTE   ESC  RETURN", classes="modal-help", id="control-help")
 
     def on_mount(self) -> None: self.query_one("#control-list", ListView).index = 0
 
@@ -499,6 +555,11 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
         index = event.list_view.index
         if index is not None:
             action = self.ACTIONS[index]
+            if not self.agent.capabilities.supports(action):
+                self.query_one("#control-help", Static).update(
+                    f"{self.agent.config.provider.upper()} DOES NOT SUPPORT {action.upper()}"
+                )
+                return
             name = self.query_one("#control-name", Input).value.strip() if action == "rename" else None
             self.dismiss((action, name))
 
@@ -791,7 +852,8 @@ class CyberdeckApp(App[None]):
         Binding("tab", "complete_prompt", "Complete", show=False, priority=True),
     ]
     LOCAL_COMMANDS: ClassVar = {
-        "/new": "initialize a new uplink",
+        "/new": "new uplink: /new CALLSIGN [RUNTIME] [PATH]",
+        "/runtimes": "show runtime availability and versions",
         "/restore": "open Archive Uplink",
         "/agents": "list connected uplinks",
         "/agent": "open Operative Control",
@@ -805,6 +867,9 @@ class CyberdeckApp(App[None]):
         "/pipe": "forward the latest response to an agent",
         "/copy": "copy response, transcript, or text",
         "/kill": "disconnect an agent after confirmation",
+        "/approve": "approve pending ICE requests",
+        "/trust": "trust the latest ICE request for this session",
+        "/deny": "deny the latest ICE request",
         "/modules": "list installed deck modules",
         "/module": "activate or manage a deck module",
         "/theme": "select or import a color theme",
@@ -839,11 +904,29 @@ class CyberdeckApp(App[None]):
         clipboard_writer: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(); self.skip_boot = skip_boot
-        self.manager = manager or AgentManager(self._agent_event)
-        self.manager._on_event = self._agent_event
-        self._persist_preferences = not skip_boot or config_store is not None
+        config_store_supplied = config_store is not None
+        self._ephemeral_root: tempfile.TemporaryDirectory[str] | None = None
+        if skip_boot and any(
+            dependency is None
+            for dependency in (config_store, journal_store, module_registry)
+        ):
+            self._ephemeral_root = tempfile.TemporaryDirectory(
+                prefix="cyberdeck-test-"
+            )
+            ephemeral = Path(self._ephemeral_root.name)
+            config_store = config_store or ConfigStore(ephemeral / "config.toml")
+            journal_store = journal_store or JournalStore(ephemeral / "journal")
+            module_registry = module_registry or ModuleRegistry(
+                ephemeral / "modules", ephemeral / "module-config"
+            )
+        self._persist_preferences = not skip_boot or config_store_supplied
         self.config_store = config_store or ConfigStore()
         self.deck_config: DeckConfig = self.config_store.load()
+        self.manager = manager or AgentManager(
+            self._agent_event,
+            runtime_registry=RuntimeRegistry(self.deck_config.runtimes),
+        )
+        self.manager._on_event = self._agent_event
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
         self.module_registry = module_registry or ModuleRegistry()
         self._clipboard_writer = clipboard_writer
@@ -940,7 +1023,10 @@ class CyberdeckApp(App[None]):
                     yield Static("▶ DECK:// 端末", id="prompt-label")
                     with Horizontal(id="prompt-bar"):
                         yield Static("local@deck:~ $", id="prompt-prefix")
-                        yield Input(placeholder="jack in... type a command or message", id="prompt")
+                        yield Input(
+                            placeholder="jack in... type a command or message",
+                            id="prompt",
+                        )
         yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^M MODULE  ^L CMD  ^S SAVE  ^O OPS  ^Q QUIT", id="shortcut-rail")
 
     def on_mount(self) -> None:
@@ -965,6 +1051,9 @@ class CyberdeckApp(App[None]):
         if self._journal_dirty:
             self._save_journal()
         await self.manager.shutdown()
+        if self._ephemeral_root:
+            self._ephemeral_root.cleanup()
+            self._ephemeral_root = None
 
     def check_action(self, action: str, parameters: tuple[object, ...]) -> bool | None:
         if not self.screen_stack:
@@ -1026,10 +1115,13 @@ class CyberdeckApp(App[None]):
 
     def _update_mnem(self, state: AgentState) -> None:
         meter = self.screen_stack[0].query_one("#agent-mnem", Static)
-        if not state.context_window:
+        if state.context_percentage is not None:
+            percent = min(100, max(0, round(state.context_percentage)))
+        elif state.context_window:
+            percent = min(100, round(state.context_tokens / state.context_window * 100))
+        else:
             meter.update(Text("MEM [······] --", style="#607087"))
             return
-        percent = min(100, round(state.context_tokens / state.context_window * 100))
         filled = min(6, round(percent / 100 * 6))
         bar = "█" * filled + "░" * (6 - filled)
         color = "#52e891" if percent < 70 else "#e9b949" if percent < 90 else "#ff3b4f"
@@ -1105,14 +1197,28 @@ class CyberdeckApp(App[None]):
             except (IndexError, NoMatches):
                 return
 
-    def action_spawn_agent(self) -> None: self.push_screen(SpawnAgent(), self._spawn_result)
+    def action_spawn_agent(self) -> None:
+        self.push_screen(
+            SpawnAgent(
+                self.manager.runtime_preflights(),
+                self.deck_config.default_runtime,
+            ),
+            self._spawn_result,
+        )
     def _spawn_result(self, result):
         if result: self._spawn(*result)
 
     @work(exclusive=False)
-    async def _spawn(self, name: str, path: Path) -> None:
+    async def _spawn(self, name: str, path: Path, provider: str = "codex") -> None:
+        preflight = next(
+            (row for row in self.manager.runtime_preflights() if row.runtime_id == provider),
+            None,
+        )
+        if preflight and not preflight.available:
+            self._write_local(f"runtime unavailable: {provider} // {preflight.detail}")
+            return
         try:
-            state = self.manager.register(name, path)
+            state = self.manager.register(name, path, provider=provider)
         except ValueError as exc:
             self._write_local(str(exc)); return
         await self._add_agent_item(state, select=True)
@@ -1174,7 +1280,14 @@ class CyberdeckApp(App[None]):
         state_for_draft = self._active_agent()
         if state_for_draft: state_for_draft.prompt_draft = ""
         if prompt.startswith("/"): await self._run_local_command(prompt); return
-        await self.deck_modules[self.active_module_id].handle_prompt(prompt)
+        # Provider sends may remain open for the entire turn (ACP session/prompt).
+        # Return control to Textual's input pump immediately so operators can keep
+        # drafting while the active agent is processing.
+        self.run_worker(
+            self.deck_modules[self.active_module_id].handle_prompt(prompt),
+            group="deck-prompt",
+            exclusive=False,
+        )
 
     async def _handle_agent_prompt(self, prompt: str) -> None:
         state = self._active_agent()
@@ -1292,6 +1405,25 @@ class CyberdeckApp(App[None]):
             if words[0] == "/kill":
                 candidates.append(("all", "all connected agents"))
             return [(name, description) for name, description in candidates if name.casefold().startswith(prefix)]
+        if words and words[0] == "/approve" and len(words) == 2:
+            prefix = "" if value.endswith(" ") else words[1].casefold()
+            return [("all", "approve every pending ICE request once")] if "all".startswith(prefix) else []
+        if words and words[0] == "/new":
+            provider_prefix: str | None = None
+            if len(words) == 2 and value.endswith(" "):
+                provider_prefix = ""
+            elif len(words) == 3 and not value.endswith(" ") and not words[2].startswith(("/", "./", "../", "~")):
+                provider_prefix = words[2].casefold()
+            elif len(words) == 3 and value.endswith(" ") and words[2].casefold() not in self.manager.available_providers:
+                provider_prefix = ""
+            elif len(words) == 4 and not value.endswith(" ") and words[2].casefold() not in self.manager.available_providers:
+                provider_prefix = words[3].casefold()
+            if provider_prefix is not None:
+                return [
+                    (provider, "agent runtime")
+                    for provider in self.manager.available_providers
+                    if provider.startswith(provider_prefix)
+                ]
         token = value.rsplit(" ", 1)[-1]
         is_new_path = value.startswith("/new ") and value.count(" ") >= 2
         if not (is_new_path or token.startswith(("/", "./", "../", "~"))):
@@ -1376,6 +1508,12 @@ class CyberdeckApp(App[None]):
 
     def action_workspace_focus(self) -> None:
         self.call_after_refresh(self._focus_active_workspace)
+
+    def _latest_ice(self) -> tuple[AgentState, PendingApproval] | None:
+        state = self._active_agent()
+        if not state or not state.pending_approvals:
+            return None
+        return state, state.pending_approvals[-1]
 
     def action_save_module(self) -> None:
         self.run_worker(self._save_active_module(), group="module-save", exclusive=True)
@@ -1594,6 +1732,12 @@ class CyberdeckApp(App[None]):
 
     def action_prompt_previous(self) -> None:
         if self.screen is not self.screen_stack[0]: return
+        state = self._active_agent()
+        if state and state.pending_approvals:
+            self.query_one("#conversation", VerticalScroll).scroll_up(
+                animate=False, force=True
+            )
+            return
         prompt = self.query_one("#prompt", Input)
         if not prompt.has_focus or not self._prompt_history: return
         if self._history_index is None:
@@ -1604,6 +1748,12 @@ class CyberdeckApp(App[None]):
 
     def action_prompt_next(self) -> None:
         if self.screen is not self.screen_stack[0]: return
+        state = self._active_agent()
+        if state and state.pending_approvals:
+            self.query_one("#conversation", VerticalScroll).scroll_down(
+                animate=False, force=True
+            )
+            return
         prompt = self.query_one("#prompt", Input)
         if not prompt.has_focus or self._history_index is None: return
         if self._history_index < len(self._prompt_history) - 1:
@@ -1751,12 +1901,51 @@ class CyberdeckApp(App[None]):
         elif command == "/restore": self.action_restore()
         elif command == "/new":
             if not args: self.action_spawn_agent()
+            elif len(args) > 3:
+                self._write_local("usage: /new CALLSIGN [RUNTIME] [PATH]")
             else:
-                path = Path(args[1]).expanduser().resolve() if len(args) > 1 else Path.cwd()
-                if path.is_dir(): self._spawn(args[0], path)
+                provider = self.deck_config.default_runtime
+                path_arg: str | None = None
+                if len(args) == 2:
+                    if args[1].casefold() in self.manager.available_providers:
+                        provider = args[1].casefold()
+                    else:
+                        path_arg = args[1]
+                elif len(args) == 3:
+                    if args[1].casefold() in self.manager.available_providers:
+                        provider, path_arg = args[1].casefold(), args[2]
+                    elif args[2].casefold() in self.manager.available_providers:
+                        # Retain the original path-first spelling for compatibility.
+                        path_arg, provider = args[1], args[2].casefold()
+                    else:
+                        self._write_local(
+                            "usage: /new CALLSIGN [RUNTIME] [PATH]"
+                        )
+                        return
+                path = Path(path_arg).expanduser().resolve() if path_arg else Path.cwd()
+                if provider not in self.manager.available_providers:
+                    self._write_local(
+                        f"unknown runtime: {provider} // choose "
+                        + ", ".join(self.manager.available_providers)
+                    )
+                elif path.is_dir(): self._spawn(args[0], path, provider)
                 else: self._write_local(f"path not found: {path}")
         elif command == "/agents":
-            self._write_local("\n".join(f"{i+1}. {a.config.name} [{a.status.value}] {a.config.working_directory}" for i, a in enumerate(self.manager.agents)) or "no uplinks connected")
+            self._write_local("\n".join(
+                f"{i+1}. {a.config.name} [{a.config.provider.upper()} / {a.status.value}] "
+                f"{a.config.working_directory}"
+                for i, a in enumerate(self.manager.agents)
+            ) or "no uplinks connected")
+        elif command == "/runtimes":
+            rows = []
+            for runtime in self.manager.runtime_preflights(refresh=True):
+                marker = "READY" if runtime.available else "OFFLINE"
+                version = f" // {runtime.version}" if runtime.version else ""
+                rows.append(
+                    f"{runtime.runtime_id:<12} [{marker}] {runtime.label}{version}\n"
+                    f"  {runtime.detail}"
+                )
+            self._write_local("RUNTIME MATRIX\n" + "\n".join(rows))
         elif command == "/modules":
             rows = [
                 f"{'●' if module_id == self.active_module_id else '○'} "
@@ -1814,6 +2003,24 @@ class CyberdeckApp(App[None]):
         elif command == "/copy": self._copy_command(args)
         elif command in {"/send", "/pipe"}: self._route_command(command, args)
         elif command == "/kill": self._request_kill(args)
+        elif command in {"/approve", "/trust", "/deny"}:
+            state = self._active_agent()
+            if not state or not state.pending_approvals:
+                self._write_local("no pending ICE requests")
+            elif command == "/approve" and args == ["all"]:
+                self._confirm_approve_all(state)
+            elif args:
+                self._write_local(
+                    "usage: /approve [all]" if command == "/approve"
+                    else f"usage: {command}"
+                )
+            else:
+                decision = {
+                    "/approve": "accept",
+                    "/trust": "acceptForSession",
+                    "/deny": "decline",
+                }[command]
+                self._approval_decided(state, state.pending_approvals[-1], decision)
         elif command in {"/rename", "/interrupt", "/retry", "/disconnect", "/archive"}:
             state = self._active_agent()
             if not state: self._write_local("No active uplink.")
@@ -2223,7 +2430,9 @@ class CyberdeckApp(App[None]):
             targets = [active] if active else []
         if not targets:
             self._write_local("no agents to kill"); return
-        names = ", ".join(agent.config.name for agent in targets)
+        names = ", ".join(
+            f"{agent.config.name} [{agent.config.provider.upper()}]" for agent in targets
+        )
         self.push_screen(
             ConfirmScreen(
                 "KILL UPLINK" if len(targets) == 1 else "KILL ALL UPLINKS",
@@ -2232,15 +2441,49 @@ class CyberdeckApp(App[None]):
             lambda yes: self._kill_agents(targets) if yes else None,
         )
 
+    def _confirm_approve_all(self, state: AgentState) -> None:
+        count = len(state.pending_approvals)
+        if not count:
+            self._write_local("no pending ICE requests")
+            return
+        self.push_screen(
+            ConfirmScreen(
+                "OPEN ALL ICE GATES",
+                f"Approve {count} pending request{'s' if count != 1 else ''} once "
+                f"for {state.config.name}?",
+            ),
+            lambda yes: self._approve_all(state) if yes else None,
+        )
+
+    @work(exclusive=False)
+    async def _approve_all(self, state: AgentState) -> None:
+        results = await self.manager.respond_all_approvals(state, "accept")
+        approved = sum(error is None for _, error in results)
+        failures = [
+            f"{approval.request_id}: {error}"
+            for approval, error in results
+            if error is not None
+        ]
+        message = f"ICE BATCH // {approved}/{len(results)} GATES OPENED ONCE"
+        if failures:
+            message += "\nFAILED // " + "\n".join(failures)
+        state.transcript.append(TranscriptEntry("system", message))
+        self._refresh_all()
+        self.call_after_refresh(lambda: self._restore_ice_input(state))
+
     @work(exclusive=False)
     async def _kill_agents(self, targets: list[AgentState]) -> None:
         results: list[str] = []
         for target in targets:
             try:
                 await self.manager.disconnect(target)
-                results.append(f"{target.config.name}: KILLED")
+                results.append(
+                    f"{target.config.name} [{target.config.provider.upper()}]: KILLED"
+                )
             except Exception as exc:  # noqa: BLE001
-                results.append(f"{target.config.name}: FAILED // {exc}")
+                results.append(
+                    f"{target.config.name} [{target.config.provider.upper()}]: FAILED // {exc}"
+                )
         self._sync_agent_list()
         self._write_local("KILL SUMMARY\n" + "\n".join(results))
         self._refresh_all()
@@ -2284,8 +2527,11 @@ class CyberdeckApp(App[None]):
                 )
             )
         if event.kind == "approval" and state is self._active_agent():
-            self._refresh_all()
-            self.call_after_refresh(self._focus_latest_approval)
+            # The approval reveal owns the final scroll position. Avoid racing it
+            # against the transcript's ordinary follow-end callback.
+            self._refresh_agent_labels()
+            self._render_active(follow_end=False)
+            self.call_after_refresh(lambda: self._restore_ice_input(state))
             return
         if event.kind == "assistant_delta" and state is self._active_agent():
             conversation = self.screen_stack[0].query_one("#conversation", VerticalScroll)
@@ -2304,10 +2550,22 @@ class CyberdeckApp(App[None]):
             return
         self._refresh_all()
 
-    def _focus_latest_approval(self) -> None:
+    def _reveal_latest_approval(self) -> None:
         approvals = list(self.screen_stack[0].query(ApprovalMessage))
         if approvals:
-            approvals[-1].focus()
+            approval = approvals[-1]
+            approval.scroll_visible(
+                animate=False,
+                top=True,
+                force=True,
+                immediate=True,
+            )
+
+    def _restore_ice_input(self, state: AgentState) -> None:
+        if state is not self._active_agent():
+            return
+        self._reveal_latest_approval()
+        self.screen_stack[0].query_one("#prompt", Input).focus()
 
     def _approval_decided(
         self, state: AgentState, approval: PendingApproval, decision: str
@@ -2330,6 +2588,7 @@ class CyberdeckApp(App[None]):
         except Exception as exc:  # noqa: BLE001
             state.transcript.append(TranscriptEntry("system", f"ICE RESPONSE FAILED // {exc}"))
         self._refresh_all()
+        self.call_after_refresh(lambda: self._restore_ice_input(state))
 
     def _refresh_all(self) -> None:
         self._refresh_agent_labels()

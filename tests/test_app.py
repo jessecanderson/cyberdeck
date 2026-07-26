@@ -1,8 +1,11 @@
+import asyncio
 import sys
 from pathlib import Path
 
 import pytest
 from rich.cells import cell_len, chop_cells
+from textual.containers import VerticalScroll
+from textual.widgets import Input
 
 from cyberdeck import __version__
 from cyberdeck.app import (
@@ -20,7 +23,9 @@ from cyberdeck.app import (
     ice_level,
     main,
 )
+from cyberdeck.config import RuntimeConfig
 from cyberdeck.domain import (
+    AgentCapabilities,
     AgentConfig,
     AgentState,
     AgentStatus,
@@ -29,7 +34,10 @@ from cyberdeck.domain import (
     PendingApproval,
     TranscriptEntry,
 )
+from cyberdeck.manager import AgentManager
+from cyberdeck.module_registry import ModuleRegistry
 from cyberdeck.providers import AgentEvent
+from cyberdeck.runtimes import RuntimePreflight, RuntimeRegistry
 
 
 @pytest.mark.asyncio
@@ -134,8 +142,9 @@ async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> No
 
 
 @pytest.mark.asyncio
-async def test_boot_screen_is_shown() -> None:
-    async with CyberdeckApp().run_test() as pilot:
+async def test_boot_screen_is_shown(tmp_path: Path) -> None:
+    registry = ModuleRegistry(tmp_path / "modules", tmp_path / "module-config")
+    async with CyberdeckApp(module_registry=registry).run_test() as pilot:
         await pilot.pause()
         assert pilot.app.screen.id is not None or pilot.app.screen.__class__.__name__ == "BootScreen"
         await pilot.press("enter")
@@ -177,11 +186,91 @@ async def test_spawn_agent_inputs_are_visible_and_accept_text() -> None:
         await pilot.pause()
         name = pilot.app.screen.query_one("#spawn-agent-name")
         path = pilot.app.screen.query_one("#spawn-agent-path")
+        provider = pilot.app.screen.query_one("#spawn-provider")
+        dialog = pilot.app.screen.query_one("#spawn-dialog")
+        assert dialog.outer_size.height == 28
         assert name.outer_size.height == 3
         assert path.outer_size.height == 3
+        assert provider.outer_size.height == 3
+        assert provider.value == "codex"
         name.focus()
         await pilot.press("g", "h", "o", "s", "t")
         assert name.value == "ghost"
+
+
+@pytest.mark.asyncio
+async def test_spawn_agent_refuses_unavailable_runtime() -> None:
+    unavailable = RuntimePreflight("offline", "Offline ACP", False, "executable missing")
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.push_screen(SpawnAgent((unavailable,), "offline"))
+        await pilot.pause()
+        pilot.app.screen.query_one("#spawn-agent-name", Input).value = "molly"
+        pilot.app.screen.query_one("#spawn-provider", Input).focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert isinstance(pilot.app.screen, SpawnAgent)
+        assert "RUNTIME UNAVAILABLE" in str(
+            pilot.app.screen.query_one("#spawn-help").content
+        )
+
+
+def test_new_command_autocompletes_agent_runtimes() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    assert app._complete("/new ghost ")[:2] == [
+        ("codex", "agent runtime"),
+        ("kiro", "agent runtime"),
+    ]
+    assert app._complete("/new ghost k") == [("kiro", "agent runtime")]
+    assert app._complete("/new ghost kiro /tm") == [("/tmp/", "directory")]
+    assert app._complete("/new ghost /tmp/ k") == [("kiro", "agent runtime")]
+    assert app._complete("/new ghost /tmp/ ") == [
+        ("codex", "agent runtime"),
+        ("kiro", "agent runtime"),
+    ]
+    assert app._complete("/approve a") == [
+        ("all", "approve every pending ICE request once")
+    ]
+    assert app._complete("/tr") == [
+        ("/trust", "trust the latest ICE request for this session")
+    ]
+    assert app._complete("/de") == [
+        ("/deny", "deny the latest ICE request")
+    ]
+
+
+def test_new_command_autocompletes_configured_runtime() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    app.manager = AgentManager(
+        app._agent_event,
+        runtime_registry=RuntimeRegistry(
+            (RuntimeConfig("work-agent", "Work ACP", (sys.executable,)),)
+        ),
+    )
+
+    assert app._complete("/new molly w") == [("work-agent", "agent runtime")]
+
+
+@pytest.mark.asyncio
+async def test_new_command_routes_explicit_provider_to_spawn(monkeypatch) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    calls: list[tuple[str, Path, str]] = []
+
+    monkeypatch.setattr(
+        app,
+        "_spawn",
+        lambda name, path, provider="codex": calls.append((name, path, provider)),
+    )
+
+    await app._run_local_command("/new wintermute kiro /tmp")
+    await app._run_local_command("/new ghost /tmp")
+    await app._run_local_command("/new cipher kiro")
+
+    assert calls == [
+        ("wintermute", Path("/tmp").resolve(), "kiro"),
+        ("ghost", Path("/tmp").resolve(), "codex"),
+        ("cipher", Path.cwd(), "kiro"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -200,6 +289,172 @@ async def test_approval_request_renders_inline_without_blocking_other_agents() -
         widget = pilot.app.query_one(ApprovalMessage)
         assert widget is not None
         assert ice_level(state, widget.approval)[0] == "GRAY ICE"
+
+
+@pytest.mark.asyncio
+async def test_overflowing_transcript_reveals_and_scrolls_focused_approval() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test(size=(100, 30)) as pilot:
+        state = pilot.app.manager.register(
+            "wintermute", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
+        )
+        state.transcript.extend(
+            TranscriptEntry("assistant", f"Historical response {index}")
+            for index in range(30)
+        )
+        state.pending_approvals.append(PendingApproval(
+            "permission-7",
+            "session/request_permission",
+            {
+                "toolCall": {"title": "run validation"},
+                "options": [
+                    {"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                    {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+                ],
+            },
+        ))
+        await pilot.app._add_agent_item(state, select=True)
+        await pilot.pause()
+
+        pilot.app._agent_event(
+            state,
+            AgentEvent(
+                "approval",
+                request_id="permission-7",
+                method="session/request_permission",
+            ),
+        )
+        await pilot.pause()
+
+        conversation = pilot.app.query_one("#conversation", VerticalScroll)
+        approval = pilot.app.query_one(ApprovalMessage)
+        assert approval.can_focus is False
+        assert pilot.app.query_one("#prompt").has_focus
+        assert conversation.scroll_y > 0
+        assert approval.region.y >= conversation.content_region.y
+
+        before = conversation.scroll_y
+        await pilot.press("up")
+        await pilot.pause()
+        assert conversation.scroll_y < before
+
+
+@pytest.mark.asyncio
+async def test_approve_all_requires_confirmation_and_resolves_batch() -> None:
+    class ApprovalAdapter:
+        def __init__(self) -> None:
+            self.approvals: list[tuple[str, str]] = []
+
+        async def respond_approval(self, request_id: str, decision: str) -> None:
+            self.approvals.append((request_id, decision))
+
+        async def stop(self) -> None:
+            pass
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register(
+            "ghost", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
+        )
+        state.pending_approvals.extend([
+            PendingApproval("permission-7", "session/request_permission", {"options": []}),
+            PendingApproval("permission-8", "session/request_permission", {"options": []}),
+        ])
+        adapter = ApprovalAdapter()
+        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/approve all")
+        assert isinstance(pilot.app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert adapter.approvals == [
+            ("permission-7", "accept"),
+            ("permission-8", "accept"),
+        ]
+        assert state.pending_approvals == []
+
+
+@pytest.mark.asyncio
+async def test_ice_card_keeps_prompt_typing_and_accepts_slash_decision() -> None:
+    class ApprovalAdapter:
+        def __init__(self) -> None:
+            self.approvals: list[tuple[str, str]] = []
+
+        async def respond_approval(self, request_id: str, decision: str) -> None:
+            self.approvals.append((request_id, decision))
+
+        async def stop(self) -> None:
+            pass
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register(
+            "wintermute", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
+        )
+        state.pending_approvals.append(PendingApproval(
+            "permission-9",
+            "session/request_permission",
+            {"options": []},
+        ))
+        adapter = ApprovalAdapter()
+        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        await pilot.app._add_agent_item(state, select=True)
+        await pilot.pause()
+        pilot.app.query_one("#prompt").focus()
+        assert pilot.app._active_agent() is state
+
+        await pilot.press("y")
+        await pilot.pause()
+
+        prompt = pilot.app.query_one("#prompt", Input)
+        assert prompt.value == "y"
+        assert adapter.approvals == []
+        assert len(state.pending_approvals) == 1
+
+        prompt.value = ""
+        await pilot.app._run_local_command("/approve")
+        await pilot.pause()
+
+        assert adapter.approvals == [("permission-9", "accept")]
+        assert state.pending_approvals == []
+
+
+@pytest.mark.asyncio
+async def test_prompt_accepts_draft_while_acp_turn_remains_open() -> None:
+    release = asyncio.Event()
+
+    class DelayedAdapter:
+        thread_id = "kiro-session"
+        model = "kiro-test"
+        model_provider = "kiro"
+
+        async def send(self, prompt: str) -> None:
+            await release.wait()
+
+        async def stop(self) -> None:
+            release.set()
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register(
+            "wintermute", Path("/tmp"), provider="kiro", status=AgentStatus.READY
+        )
+        pilot.app.manager._adapters[str(state.config.id)] = DelayedAdapter()
+        await pilot.app._add_agent_item(state, select=True)
+        await pilot.pause()
+
+        prompt = pilot.app.query_one("#prompt", Input)
+        prompt.value = "start long turn"
+        prompt.focus()
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert state.status is AgentStatus.PROCESSING
+        await pilot.press("n", "e", "x", "t")
+        await pilot.pause()
+
+        assert prompt.has_focus
+        assert prompt.value == "next"
+        release.set()
+        await pilot.pause()
 
 
 def test_dangerous_command_is_classified_as_black_ice() -> None:
@@ -277,6 +532,20 @@ async def test_new_shortcuts_open_agent_overlays() -> None:
 
 
 @pytest.mark.asyncio
+async def test_operative_control_marks_unsupported_capabilities() -> None:
+    state = AgentState(AgentConfig("molly", Path("/tmp"), provider="kiro"))
+    state.capabilities = AgentCapabilities(load_session=True, interrupt=True)
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.push_screen(OperativeControl(state))
+        await pilot.pause()
+
+        labels = [str(label.content) for label in pilot.app.screen.query("#control-list Label")]
+        assert "RENAME  [UNAVAILABLE]" in labels
+        assert "RETRY" in labels
+        assert "ARCHIVE  [UNAVAILABLE]" in labels
+
+
+@pytest.mark.asyncio
 async def test_prompt_history_restores_newest_draft() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         prompt = pilot.app.query_one("#prompt")
@@ -291,7 +560,12 @@ async def test_prompt_history_restores_newest_draft() -> None:
 
 def test_lifecycle_and_dispatch_commands_are_autocompletable() -> None:
     app = CyberdeckApp(skip_boot=True)
-    expected = {"/agent", "/rename", "/interrupt", "/retry", "/disconnect", "/archive", "/dispatch", "/copy", "/send", "/pipe", "/kill"}
+    expected = {
+        "/agent", "/rename", "/interrupt", "/retry", "/disconnect",
+        "/archive", "/dispatch", "/copy", "/send", "/pipe", "/kill",
+        "/approve", "/trust", "/deny",
+        "/runtimes",
+    }
     assert expected <= set(app.LOCAL_COMMANDS)
 
 
@@ -350,6 +624,8 @@ async def test_kill_requires_confirmation() -> None:
         await pilot.app._add_agent_item(state, select=True)
         await pilot.app._run_local_command("/kill ghost")
         assert isinstance(pilot.app.screen, ConfirmScreen)
+        await pilot.pause()
+        assert "ghost [CODEX]" in pilot.app.screen.message
         assert state in pilot.app.manager.agents
         await pilot.press("n")
         assert state in pilot.app.manager.agents

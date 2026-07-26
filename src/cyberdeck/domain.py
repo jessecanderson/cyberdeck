@@ -8,6 +8,30 @@ from typing import Any
 from uuid import UUID, uuid4
 
 
+@dataclass(frozen=True, slots=True)
+class AgentCapabilities:
+    load_session: bool = False
+    history: bool = False
+    rename: bool = False
+    archive: bool = False
+    interrupt: bool = True
+    approvals: bool = True
+    tool_events: bool = True
+    model_selection: bool = False
+    templates: bool = False
+    remote_transport: bool = False
+
+    def supports(self, action: str) -> bool:
+        return {
+            "retry": self.load_session,
+            "rename": self.rename,
+            "archive": self.archive,
+            "interrupt": self.interrupt,
+            "approvals": self.approvals,
+            "history": self.history,
+        }.get(action, True)
+
+
 class AgentStatus(str, Enum):
     STARTING = "starting"
     RESTORING = "restoring"
@@ -18,6 +42,7 @@ class AgentStatus(str, Enum):
     FIREWALL_HOLD = "ice hold"
     ERROR = "error"
     STOPPED = "stopped"
+
 
 class OperationState(str, Enum):
     PENDING = "pending"
@@ -105,10 +130,12 @@ class AgentState:
     restored: bool = False
     context_tokens: int = 0
     context_window: int | None = None
+    context_percentage: float | None = None
     prompt_draft: str = ""
     error_message: str | None = None
     recovery_attempts: int = 0
     pending_approvals: list[PendingApproval] = field(default_factory=list)
+    capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
 
 
 def parse_timestamp(value: Any) -> datetime:
