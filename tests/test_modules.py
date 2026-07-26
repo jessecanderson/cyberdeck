@@ -187,6 +187,28 @@ def test_pending_update_rolls_back_when_new_environment_fails(
     assert not new_environment.exists()
 
 
+def test_remove_rejects_previous_environment_outside_module_root(tmp_path: Path) -> None:
+    registry = ModuleRegistry(tmp_path / "modules", tmp_path / "config")
+    environment = registry.root / "status"
+    environment.mkdir(parents=True)
+    outside = tmp_path / "do-not-delete"
+    outside.mkdir()
+    record = ModuleRecord(
+        "status",
+        "cyberdeck-module-status",
+        "0.1.0",
+        "local",
+        environment.name,
+        previous_environment="../../do-not-delete",
+    )
+    registry.records[record.id] = record
+
+    with pytest.raises(ValueError, match="escaped the module root"):
+        registry.remove(record.id)
+
+    assert outside.exists()
+
+
 @pytest.mark.integration
 def test_local_module_installs_into_user_owned_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

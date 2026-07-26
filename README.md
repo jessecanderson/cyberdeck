@@ -2,15 +2,23 @@
 
 [![CI](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml/badge.svg)](https://github.com/jessecanderson/cyberdeck/actions/workflows/ci.yml)
 
+[Changelog](CHANGELOG.md) · [Releases](https://github.com/jessecanderson/cyberdeck/releases)
+
 A neon, keyboard-first TUI for running multiple local coding agents. The first
 provider uses the experimental Codex app-server protocol over stdio.
+
+The interface uses a restrained, original ODS cyberdeck vocabulary: open agents
+occupy the Local Grid, normalized activity appears in the Grid Trace, permission
+boundaries surface as ICE, and workspaces live in the Module Bay. See the
+[interface language guide](docs/design-language.md).
 
 ## Visual tour
 
 ### Agent Command Center
 
-Run independent agent uplinks, follow live state and context telemetry, review
-normalized operations, and keep approvals inline with the conversation.
+Map independent operatives on the Local Grid, follow live carrier and memory
+state, review the semantic Grid Trace, and keep ICE approvals inline with the
+conversation.
 
 ![Cyberdeck Agent Command Center](docs/screenshots/agent-command.svg)
 

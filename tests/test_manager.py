@@ -101,6 +101,20 @@ async def test_dispatch_rejects_busy_target_before_any_send() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> None:
+    deck = manager(); state, adapter = attach(deck, "ghost")
+    adapter.fail_send = True
+
+    with pytest.raises(RuntimeError, match="radio failure"):
+        await deck.send(state, "unaccepted prompt")
+
+    assert state.transcript == []
+    assert state.status is AgentStatus.ERROR
+    assert state.current_activity == "transmission failed"
+    assert state.error_message == "radio failure"
+
+
+@pytest.mark.asyncio
 async def test_approval_is_owned_by_agent_until_answered() -> None:
     deck = manager(); state, adapter = attach(deck, "ghost")
     adapter.queue.append(AgentEvent(
@@ -118,3 +132,22 @@ async def test_approval_is_owned_by_agent_until_answered() -> None:
     assert adapter.approvals == [(42, "accept")]
     assert state.pending_approvals == []
     assert state.status is AgentStatus.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_distinct_agent_message_ids_create_distinct_transcript_entries() -> None:
+    deck = manager(); state, adapter = attach(deck, "ghost")
+    adapter.queue.extend(
+        [
+            AgentEvent("assistant_delta", "I will review it.", message_id="message-1"),
+            AgentEvent("assistant_delta", " More soon.", message_id="message-1"),
+            AgentEvent("assistant_delta", "I reviewed it.", message_id="message-2"),
+        ]
+    )
+
+    await deck._pump(state, adapter)
+
+    assert [(entry.text, entry.source_id) for entry in state.transcript] == [
+        ("I will review it. More soon.", "message-1"),
+        ("I reviewed it.", "message-2"),
+    ]

@@ -83,6 +83,9 @@ class ModuleRegistry:
         relative = record.pending_environment if pending else record.environment
         if not relative:
             raise ValueError("Module has no pending environment")
+        return self._contained_environment(relative)
+
+    def _contained_environment(self, relative: str) -> Path:
         resolved = (self.root / relative).resolve()
         if self.root.resolve() not in resolved.parents:
             raise ValueError("Module environment escaped the module root")
@@ -114,7 +117,7 @@ class ModuleRegistry:
                 record.error = None
                 modules[record.id] = module
                 if record.previous_environment:
-                    previous = self.root / record.previous_environment
+                    previous = self._contained_environment(record.previous_environment)
                     record.previous_environment = None
                     shutil.rmtree(previous, ignore_errors=True)
             except Exception as exc:  # noqa: BLE001
@@ -252,12 +255,15 @@ class ModuleRegistry:
         return module
 
     def remove(self, module_id: str) -> None:
-        record = self.records.pop(module_id)
-        shutil.rmtree(self.environment_path(record), ignore_errors=True)
+        record = self.records[module_id]
+        environments = [self.environment_path(record)]
         if record.pending_environment:
-            shutil.rmtree(self.environment_path(record, pending=True), ignore_errors=True)
+            environments.append(self.environment_path(record, pending=True))
         if record.previous_environment:
-            shutil.rmtree(self.root / record.previous_environment, ignore_errors=True)
+            environments.append(self._contained_environment(record.previous_environment))
+        self.records.pop(module_id)
+        for environment in environments:
+            shutil.rmtree(environment, ignore_errors=True)
         self.save()
 
     def _load_environment(

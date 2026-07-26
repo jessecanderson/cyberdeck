@@ -3,7 +3,12 @@ import json
 
 import pytest
 
-from cyberdeck.providers.codex import CodexAppServerAdapter, CodexProtocolError
+from cyberdeck.providers.base import AgentEvent
+from cyberdeck.providers.codex import (
+    CODEX_STREAM_LIMIT,
+    CodexAppServerAdapter,
+    CodexProtocolError,
+)
 
 
 class Writer:
@@ -15,6 +20,15 @@ class Writer:
 
     async def drain(self) -> None:
         pass
+
+
+def test_agent_event_preserves_positional_provider_compatibility() -> None:
+    event = AgentEvent("approval", "", 42, "request/approval", {"id": 1})
+
+    assert event.request_id == 42
+    assert event.method == "request/approval"
+    assert event.params == {"id": 1}
+    assert event.message_id is None
 
 
 @pytest.mark.asyncio
@@ -49,12 +63,12 @@ async def test_send_emits_processing_status() -> None:
     adapter.thread_id = "thread-1"
 
     task = asyncio.create_task(adapter.send("hello"))
-    event = await adapter._events.get()
-    assert event is not None
-    assert (event.kind, event.text) == ("status", "processing")
     await asyncio.sleep(0)
     adapter._pending[1].set_result({"turn": {"id": "turn-1"}})
     await task
+    event = await adapter._events.get()
+    assert event is not None
+    assert (event.kind, event.text) == ("status", "processing")
     assert adapter.active_turn_id == "turn-1"
 
 
@@ -112,6 +126,32 @@ async def test_intentional_stdout_eof_is_silent() -> None:
     adapter.process = type("Process", (), {"stdout": reader})()
     await adapter._read_stdout()
     assert adapter._events.empty()
+
+
+@pytest.mark.asyncio
+async def test_stdout_accepts_json_rpc_lines_larger_than_asyncio_default() -> None:
+    text = "signal" * 12_000
+    message = {
+        "method": "item/agentMessage/delta",
+        "params": {"delta": text, "itemId": "message-1"},
+    }
+    encoded = json.dumps(message).encode() + b"\n"
+    assert len(encoded) > 64 * 1024
+    assert len(encoded) < CODEX_STREAM_LIMIT
+
+    reader = asyncio.StreamReader(limit=CODEX_STREAM_LIMIT)
+    reader.feed_data(encoded)
+    reader.feed_eof()
+    adapter = CodexAppServerAdapter()
+    adapter._intentional_shutdown = True
+    adapter.process = type("Process", (), {"stdout": reader})()
+
+    await adapter._read_stdout()
+
+    event = await adapter._events.get()
+    assert event is not None
+    assert event.kind == "assistant_delta"
+    assert event.text == text
 
 
 @pytest.mark.asyncio
@@ -182,3 +222,25 @@ async def test_token_usage_notification_becomes_agent_event() -> None:
     assert event is not None
     assert event.kind == "token_usage"
     assert event.params == params
+
+
+@pytest.mark.asyncio
+async def test_agent_message_delta_preserves_item_identity() -> None:
+    adapter = CodexAppServerAdapter()
+    await adapter._handle_notification(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "message-7",
+                "delta": "Signal acquired.",
+            },
+        }
+    )
+
+    event = await adapter._events.get()
+    assert event is not None
+    assert event.kind == "assistant_delta"
+    assert event.message_id == "message-7"
+    assert event.text == "Signal acquired."

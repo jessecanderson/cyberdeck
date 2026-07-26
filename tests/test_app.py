@@ -13,6 +13,7 @@ from cyberdeck.app import (
     ConfirmScreen,
     CyberdeckApp,
     DispatchScreen,
+    EmptyGrid,
     OperativeControl,
     RestoreScreen,
     SpawnAgent,
@@ -23,6 +24,8 @@ from cyberdeck.domain import (
     AgentConfig,
     AgentState,
     AgentStatus,
+    OperationEntry,
+    OperationState,
     PendingApproval,
     TranscriptEntry,
 )
@@ -38,10 +41,66 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#top-rail") is not None
         assert pilot.app.query_one("#conversation") is not None
         assert pilot.app.query_one("#signal-trace") is not None
-        assert pilot.app.query_one("#state-transition").display is False
+        transition = pilot.app.query_one("#state-transition")
+        assert transition.display is True
+        assert transition.visible is False
+        assert pilot.app.query_one(EmptyGrid) is not None
+        assert "LOCAL GRID 00/00" in str(pilot.app.query_one("#uplink-count").content)
+        assert "NO ACTIVE CONSTRUCT" in str(pilot.app.query_one("#agent-name").content)
+        assert "STATE OFFLINE" in str(pilot.app.query_one("#agent-state").content)
         assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
         assert "接続" in str(pilot.app.query_one("#sidebar-title").content)
+        assert "LOCAL GRID" in str(pilot.app.query_one("#sidebar-title").content)
+        assert "MODULE BAY" in str(pilot.app.query_one("#modules-title").content)
         assert "電脳端末" in str(pilot.app.query_one("#deck-brand").content)
+
+
+def test_agent_label_exposes_real_local_provider_topology() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    state = AgentState(
+        AgentConfig("ghost", Path("/tmp")),
+        status=AgentStatus.READY,
+        model_provider="codex",
+    )
+    label = str(app._agent_label(state))
+    assert "SYN::GHOST" in label
+    assert "CODEX / LOCAL" in label
+    assert "tmp" in label
+
+
+@pytest.mark.parametrize(
+    ("status", "unread", "attention"),
+    [
+        (AgentStatus.FIREWALL_HOLD, 0, "ATTN::ICE"),
+        (AgentStatus.ERROR, 0, "ATTN::FAULT"),
+        (AgentStatus.READY, 3, "ECHO +3"),
+    ],
+)
+def test_agent_label_surfaces_attention(
+    status: AgentStatus, unread: int, attention: str
+) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    state = AgentState(
+        AgentConfig("ghost", Path("/tmp")),
+        status=status,
+        unread_count=unread,
+    )
+    assert attention in str(app._agent_label(state))
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (OperationEntry("commandExecution", "ls"), "TRACE"),
+        (OperationEntry("fileChange", "app.py"), "PATCH"),
+        (OperationEntry("mcpToolCall", "issues"), "PROBE"),
+        (OperationEntry("webSearch", "ACP"), "SCAN"),
+        (OperationEntry("tool", "blocked", OperationState.APPROVAL), "ICE"),
+        (OperationEntry("tool", "broken", OperationState.FAILED), "FAULT"),
+    ],
+)
+def test_grid_trace_classes_are_semantic(operation: OperationEntry, expected: str) -> None:
+    assert CyberdeckApp._trace_class(operation) == expected
 
 
 @pytest.mark.asyncio
@@ -62,8 +121,7 @@ async def test_local_help_command_does_not_require_agent() -> None:
 async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> None:
     copied: list[str] = []
     monkeypatch.setattr(CyberdeckApp, "_executable_version", staticmethod(lambda _name: "codex 1.2.3"))
-    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
-        pilot.app.copy_to_clipboard = copied.append
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         await pilot.app._run_local_command("/about")
         await pilot.pause()
         assert isinstance(pilot.app.screen, AboutScreen)
@@ -166,6 +224,32 @@ async def test_operations_console_toggles() -> None:
 
 
 @pytest.mark.asyncio
+async def test_grid_trace_rows_include_class_and_phase() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.operations.extend(
+            [
+                OperationEntry("commandExecution", "pytest", OperationState.RUNNING),
+                OperationEntry("fileChange", "app.py", OperationState.SUCCEEDED),
+            ]
+        )
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app._render_active()
+        await pilot.pause()
+        labels = [str(label.content) for label in pilot.app.query("#operations-list Label")]
+        assert any("TRACE" in label and "ACTIVE" in label for label in labels)
+        assert any("PATCH" in label and "CLEAR" in label for label in labels)
+
+
+@pytest.mark.asyncio
+async def test_grid_layout_survives_narrow_terminal() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test(size=(80, 30)) as pilot:
+        await pilot.pause()
+        assert pilot.app.query_one("#sidebar").size.width >= 26
+        assert pilot.app.query_one(EmptyGrid) is not None
+
+
+@pytest.mark.asyncio
 async def test_tab_in_restore_screen_moves_focus_without_prompt_lookup() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         pilot.app.push_screen(RestoreScreen([]))
@@ -228,7 +312,7 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
 @pytest.mark.asyncio
 async def test_copy_defaults_to_latest_assistant_response() -> None:
     copied: list[str] = []
-    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
         state.transcript.extend([
             TranscriptEntry("assistant", "first"),
@@ -236,9 +320,27 @@ async def test_copy_defaults_to_latest_assistant_response() -> None:
             TranscriptEntry("assistant", "latest"),
         ])
         await pilot.app._add_agent_item(state, select=True)
-        pilot.app.copy_to_clipboard = copied.append
         await pilot.app._run_local_command("/copy")
         assert copied == ["latest"]
+
+
+def test_macos_clipboard_uses_pbcopy(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], str]] = []
+
+    def run(command, *, input, text, check, timeout):
+        assert text is True
+        assert check is True
+        assert timeout == 2
+        calls.append((command, input))
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("cyberdeck.app.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("cyberdeck.app.subprocess.run", run)
+
+    target = CyberdeckApp(skip_boot=True)._copy_text("deck signal")
+
+    assert target == "pbcopy"
+    assert calls == [(["/usr/bin/pbcopy"], "deck signal")]
 
 
 @pytest.mark.asyncio
@@ -264,5 +366,90 @@ async def test_agent_events_show_real_state_transition_banner() -> None:
         await pilot.app._add_agent_item(state, select=True)
         pilot.app._agent_event(state, AgentEvent("status", "processing"))
         banner = pilot.app.query_one("#state-transition")
-        assert banner.display is True
-        assert "SIGNAL ENGAGED // 稼働" in str(banner.content)
+        assert banner.visible is True
+        assert "CONSTRUCT ACTIVE // SIGNAL ENGAGED" in str(banner.content)
+
+
+@pytest.mark.asyncio
+async def test_state_transition_does_not_resize_conversation() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(state, select=True)
+        await pilot.pause()
+        conversation = pilot.app.query_one("#conversation")
+        initial_region = conversation.region
+
+        pilot.app._agent_event(state, AgentEvent("status", "processing"))
+        await pilot.pause()
+        assert conversation.region == initial_region
+
+        pilot.app._hide_transition(pilot.app._transition_serial)
+        await pilot.pause()
+        assert conversation.region == initial_region
+
+
+@pytest.mark.asyncio
+async def test_restore_banner_is_only_shown_for_initial_ready_event() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.restored = True
+        await pilot.app._add_agent_item(state, select=True)
+
+        pilot.app._agent_event(state, AgentEvent("status", "ready"))
+        banner = pilot.app.query_one("#state-transition")
+        assert "CONSTRUCT RESTORED" in str(banner.content)
+        assert state.restored is False
+
+        pilot.app._agent_event(state, AgentEvent("status", "ready"))
+        assert "GRID MAPPED // CARRIER STABLE" in str(banner.content)
+
+
+@pytest.mark.asyncio
+async def test_background_unread_count_tracks_messages_not_protocol_events() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        active = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        background = pilot.app.manager.register("molly", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(active, select=True)
+        await pilot.app._add_agent_item(background, select=False)
+
+        background.transcript.append(TranscriptEntry("assistant", "first", source_id="one"))
+        pilot.app._agent_event(background, AgentEvent("assistant_delta", "first", message_id="one"))
+        pilot.app._agent_event(background, AgentEvent("assistant_delta", " continues", message_id="one"))
+        pilot.app._agent_event(background, AgentEvent("token_usage"))
+        pilot.app._agent_event(background, AgentEvent("status", "ready"))
+        assert background.unread_count == 1
+
+        background.transcript.append(TranscriptEntry("assistant", "second", source_id="two"))
+        pilot.app._agent_event(background, AgentEvent("assistant_delta", "second", message_id="two"))
+        assert background.unread_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["error", "transport_closed"])
+async def test_agent_failure_shows_reason_and_retry_instruction(kind: str) -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(state, select=True)
+
+        pilot.app._agent_event(state, AgentEvent(kind, "Codex app-server closed stdout"))
+
+        notice = state.transcript[-1]
+        assert notice.role == "system"
+        assert "GRID FRACTURE // SIGNAL LOST" in notice.text
+        assert "Codex app-server closed stdout" in notice.text
+        assert "RECOVERY AVAILABLE // run /retry" in notice.text
+
+
+@pytest.mark.asyncio
+async def test_background_agent_failure_keeps_recovery_notice_with_owner() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        active = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        failed = pilot.app.manager.register("molly", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(active, select=True)
+        await pilot.app._add_agent_item(failed, select=False)
+
+        pilot.app._agent_event(failed, AgentEvent("transport_closed", "reader failed"))
+
+        assert not active.transcript
+        assert "reader failed" in failed.transcript[-1].text
+        assert "/retry" in failed.transcript[-1].text

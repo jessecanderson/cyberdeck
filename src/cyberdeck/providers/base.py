@@ -13,6 +13,7 @@ class AgentEvent:
     request_id: int | str | None = None
     method: str = ""
     params: dict[str, Any] | None = None
+    message_id: str | None = None
 
 
 class AgentAdapter(Protocol):

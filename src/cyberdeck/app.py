@@ -9,6 +9,7 @@ import random
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from importlib.metadata import version as package_version
@@ -109,6 +110,13 @@ class BootScreen(Screen[None]):
         ("  Archive bus....... Codex history bridge ............. FOUND", "#52e891", 0.07),
         ("  Network........... loopback only / stealth mode", "#cce7ed", 0.08),
         ("", "", 0.04),
+        ("[ GRID ] Mapping local cognition topology", "bold #e62acb", 0.10),
+        ("  Local grid........ private workspace lattice ....... MAPPED", "#52e891", 0.05),
+        ("  Provider gate..... Codex app-server ................. READY", "#52e891", 0.05),
+        ("  ICE response...... authorization table .............. ARMED", "#e9b949", 0.05),
+        ("  Constructs........ session memory index ............. READY", "#52e891", 0.07),
+        ("  Operator link..... 待機中 / awaiting neural handshake", "#00e8f2", 0.10),
+        ("", "", 0.04),
         ("[ SECURITY ] Establishing containment", "bold #e62acb", 0.10),
         ("  Secure enclave.... challenge accepted ............... PASS", "#52e891", 0.05),
         ("  Workspace roots... access matrix loaded ............. PASS", "#52e891", 0.05),
@@ -164,7 +172,11 @@ class BootScreen(Screen[None]):
 
     def _render_noise(self) -> None:
         """Repaint POST and phosphor noise into one terminal-cell surface."""
-        log = self.query_one("#boot-log", Static)
+        try:
+            log = self.query_one("#boot-log", Static)
+        except NoMatches:
+            # The boot worker may begin before the screen's children finish mounting.
+            return
         width, height = max(log.size.width - 4, 1), max(log.size.height, 1)
         visible = self._boot_output[-height:]
         rows = visible + [("", "")] * (height - len(visible))
@@ -207,7 +219,7 @@ class BootScreen(Screen[None]):
 
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
-    HELP_TEXT = """LOCAL COMMANDS
+    HELP_TEXT = """DECK COMMAND INDEX // LOCAL CONTROL
 
 /new [name] [path]   Initialize a new uplink
 /restore             Open ARCHIVE UPLINK
@@ -264,8 +276,12 @@ class AboutScreen(ModalScreen[None]):
             yield Static("C  COPY DIAGNOSTICS     ESC  RETURN", classes="modal-help")
 
     def action_copy(self) -> None:
-        self.app.copy_to_clipboard(self.manifest)
-        self.notify("System manifest copied", title="DIAGNOSTICS")
+        try:
+            self.app._copy_text(self.manifest)
+        except RuntimeError as exc:
+            self.notify(str(exc), title="CLIPBOARD FAULT", severity="error")
+        else:
+            self.notify("System manifest copied", title="DIAGNOSTICS")
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -468,7 +484,10 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="control-dialog"):
-            yield Label(f"OPERATIVE CONTROL // {self.agent.config.name}", id="control-title")
+            yield Label(
+                f"OPERATIVE CONTROL // SYN::{self.agent.config.name.upper()}",
+                id="control-title",
+            )
             yield Input(value=self.agent.config.name, placeholder="New callsign", id="control-name")
             yield ListView(*(ListItem(Label(action.upper())) for action in self.ACTIONS), id="control-list")
             yield Static("ENTER  EXECUTE   ESC  RETURN", classes="modal-help")
@@ -504,14 +523,18 @@ class AgentSwitcher(ModalScreen[AgentState | None]):
     @on(Input.Changed, "#switch-search")
     def search(self, event: Input.Changed) -> None:
         term = event.value.casefold()
-        self.filtered = [a for a in self.agents if term in " ".join((a.config.name, a.config.working_directory.name, str(a.config.working_directory), a.status.value)).casefold()]
+        self.filtered = [a for a in self.agents if term in " ".join((a.config.name, a.model_provider, a.config.working_directory.name, str(a.config.working_directory), a.status.value)).casefold()]
         self._rebuild()
 
     def _rebuild(self) -> None:
         view = self.query_one("#switch-list", ListView); view.clear()
         for agent in self.filtered:
             active = " [ACTIVE]" if agent is self.active else ""
-            view.append(ListItem(Label(f"{agent.config.name}  {agent.status.value.upper()}{active}\n  {agent.config.working_directory}")))
+            provider = (agent.model_provider or agent.config.provider).upper()
+            view.append(ListItem(Label(
+                f"SYN::{agent.config.name.upper()}  {agent.status.value.upper()}{active}\n"
+                f"  {provider} / LOCAL  ─  {agent.config.working_directory}"
+            )))
         if self.filtered: view.index = 0
 
     def action_choose(self) -> None:
@@ -547,7 +570,10 @@ class DispatchScreen(ModalScreen[tuple[list[AgentState], str] | None]):
         view = self.query_one("#dispatch-list", ListView); view.clear()
         for agent in self.filtered:
             mark = "◆" if agent.config.id in self.selected else "◇"
-            view.append(ListItem(Label(f"{mark} {agent.config.name}  [{agent.status.value.upper()}]  {agent.config.working_directory.name}")))
+            view.append(ListItem(Label(
+                f"{mark} SYN::{agent.config.name.upper()}  "
+                f"[{agent.status.value.upper()}]  {agent.config.working_directory.name}"
+            )))
         if self.filtered: view.index = 0
 
     def action_toggle(self) -> None:
@@ -594,13 +620,26 @@ class TerminalMessage(Static):
         return Group(prefix, Padding(Markdown(markdown), (0, 0, 0, len(time) + 2)))
 
 
+class EmptyGrid(Static):
+    def render(self) -> Group:
+        return Group(
+            Text("LOCAL GRID // NO OPERATIVES", style="bold #00e8f2"),
+            Text("\nNo active constructs are mapped to this deck.", style="#607087"),
+            Text("\n\n^N  INITIALIZE UPLINK", style="bold #52e891"),
+            Text("\n^R  OPEN ARCHIVE", style="#8ba2b3"),
+            Text("\n\n待機中 // AWAITING OPERATOR", style="#283748"),
+        )
+
+
 class OperationDetail(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
     def __init__(self, operation: OperationEntry) -> None:
         super().__init__(); self.operation = operation
     def compose(self) -> ComposeResult:
         op = self.operation
-        fields = [f"TYPE       {op.kind}", f"STATE      {op.state.value}",
+        fields = ["GRID TRACE // OPERATION DETAIL", "",
+                  f"CLASS      {CyberdeckApp._trace_class(op)}",
+                  f"TYPE       {op.kind}", f"STATE      {op.state.value}",
                   f"SUMMARY    {op.summary}"]
         for label, value in (("CWD", op.cwd), ("DURATION", f"{op.duration_ms} ms" if op.duration_ms else None),
                              ("EXIT CODE", op.exit_code), ("FILES", ", ".join(op.files) or None),
@@ -654,14 +693,14 @@ class AgentsWorkspace(Vertical):
                 yield Static(id="agent-model")
                 yield Static("│ STATE OFFLINE", id="agent-state")
                 yield Static("│ awaiting uplink", id="agent-activity")
-                yield Static("NET [····]", id="agent-network")
-                yield Static("MNEM [······] --", id="agent-mnem")
+                yield Static("GRID [····]", id="agent-network")
+                yield Static("MEM [······] --", id="agent-mnem")
                 yield Static(id="agent-cwd")
             yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
         yield Static(id="state-transition")
         yield VerticalScroll(id="conversation")
         with Vertical(id="operations-console"):
-            yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
+            yield Static("GRID TRACE // LIVE OPERATIONS", id="operations-title")
             yield ListView(id="operations-list")
 
 
@@ -797,6 +836,7 @@ class CyberdeckApp(App[None]):
         config_store: ConfigStore | None = None,
         journal_store: JournalStore | None = None,
         module_registry: ModuleRegistry | None = None,
+        clipboard_writer: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(); self.skip_boot = skip_boot
         self.manager = manager or AgentManager(self._agent_event)
@@ -806,6 +846,7 @@ class CyberdeckApp(App[None]):
         self.deck_config: DeckConfig = self.config_store.load()
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
         self.module_registry = module_registry or ModuleRegistry()
+        self._clipboard_writer = clipboard_writer
         self.module_registry.apply_pending_updates()
         self.deck_themes, self._theme_errors = discover_themes()
         for deck_theme in self.deck_themes.values():
@@ -874,9 +915,9 @@ class CyberdeckApp(App[None]):
             yield Static(id="deck-clock")
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar"):
-                yield Label("── AGENTS // 接続 ──", id="sidebar-title")
+                yield Label("── LOCAL GRID // 接続 ──", id="sidebar-title")
                 yield ListView(id="agents")
-                yield Label("── MODULES // 機能 ──", id="modules-title")
+                yield Label("── MODULE BAY // 機能 ──", id="modules-title")
                 yield ListView(
                     *(
                         ListItem(Label(self._module_label_id(module_id)))
@@ -904,7 +945,9 @@ class CyberdeckApp(App[None]):
 
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
-        self.query_one("#state-transition").display = False
+        # Keep the transition rail in layout so transient alerts never resize the
+        # conversation viewport; visibility hides only its paint.
+        self.query_one("#state-transition").visible = False
         for module_id, widget in self.module_widgets.items():
             widget.display = module_id == "agents"
         self._update_rails(); self.set_interval(1, self._update_rails)
@@ -954,7 +997,7 @@ class CyberdeckApp(App[None]):
         now = datetime.now().astimezone().strftime("%H:%M:%S")
         try:
             self.query_one("#uplink-count", Static).update(
-                f"UPLINKS {active:02d}/{len(self.manager.agents):02d}"
+                f"LOCAL GRID {active:02d}/{len(self.manager.agents):02d}"
             )
             self.query_one("#deck-clock", Static).update(now)
         except NoMatches:
@@ -973,17 +1016,24 @@ class CyberdeckApp(App[None]):
             self.query_one("#agent-activity", Static).update(f"│ {state.current_activity}")
             self._update_network()
             self._update_mnem(state)
+        else:
+            self.query_one("#agent-name", Static).update("NO ACTIVE CONSTRUCT")
+            self.query_one("#agent-model", Static).update("│ PROVIDER --")
+            self.query_one("#agent-state", Static).update("│ STATE OFFLINE")
+            self.query_one("#agent-activity", Static).update("│ awaiting operator")
+            self.query_one("#agent-cwd", Static).update("")
+            self._update_network()
 
     def _update_mnem(self, state: AgentState) -> None:
         meter = self.screen_stack[0].query_one("#agent-mnem", Static)
         if not state.context_window:
-            meter.update(Text("MNEM [······] --", style="#607087"))
+            meter.update(Text("MEM [······] --", style="#607087"))
             return
         percent = min(100, round(state.context_tokens / state.context_window * 100))
         filled = min(6, round(percent / 100 * 6))
         bar = "█" * filled + "░" * (6 - filled)
         color = "#52e891" if percent < 70 else "#e9b949" if percent < 90 else "#ff3b4f"
-        meter.update(Text(f"MNEM [{bar}] {percent:02d}%", style=f"bold {color}"))
+        meter.update(Text(f"MEM [{bar}] {percent:02d}%", style=f"bold {color}"))
 
     def _update_network(self) -> None:
         state = self._active_agent()
@@ -995,17 +1045,17 @@ class CyberdeckApp(App[None]):
         self._update_signal_trace(state)
         self._refresh_agent_labels()
         if not state:
-            indicator.update(Text("NET [····]", style="#607087"))
+            indicator.update(Text("GRID [····]", style="#607087"))
             return
         patterns = ("▁▃▅▇", "▃▅▇▅", "▅▇▅▃", "▇▅▃▁")
         if state.status is AgentStatus.ERROR:
-            label, color = "NET [LOST]", "#ff3b4f"
+            label, color = "GRID [LOST]", "#ff3b4f"
         elif state.status is AgentStatus.FIREWALL_HOLD:
-            label, color = "NET [HOLD]", "#ff3b4f"
+            label, color = "GRID [ICE]", "#ff3b4f"
         elif state.status in {AgentStatus.PROCESSING, AgentStatus.EXECUTING, AgentStatus.EDITING, AgentStatus.RESTORING}:
-            label, color = f"NET [{patterns[self._network_phase]}]", "#e9b949"
+            label, color = f"GRID [{patterns[self._network_phase]}]", "#e9b949"
         else:
-            label, color = f"NET [{patterns[self._network_phase]}]", "#52e891"
+            label, color = f"GRID [{patterns[self._network_phase]}]", "#52e891"
         indicator.update(Text(label, style=f"bold {color}"))
 
     def _update_signal_trace(self, state: AgentState | None) -> None:
@@ -1045,13 +1095,13 @@ class CyberdeckApp(App[None]):
         self._transition_serial += 1
         serial = self._transition_serial
         banner.update(Text(f"▶ {message} // {state.config.name.upper()}", style=f"bold {color}"))
-        banner.display = True
+        banner.visible = True
         self.set_timer(2.4, lambda: self._hide_transition(serial))
 
     def _hide_transition(self, serial: int) -> None:
         if serial == self._transition_serial:
             try:
-                self.screen_stack[0].query_one("#state-transition", Static).display = False
+                self.screen_stack[0].query_one("#state-transition", Static).visible = False
             except (IndexError, NoMatches):
                 return
 
@@ -1133,7 +1183,9 @@ class CyberdeckApp(App[None]):
             self._write_local(f"{state.config.name} is {state.status.value.upper()}; wait for READY"); return
         try: await self.manager.send(state, prompt)
         except Exception as exc:  # noqa: BLE001
-            self._write_local(f"transmission failed: {exc}")
+            self._write_local(
+                f"TRANSMISSION FAILED // {exc}\nRECOVERY AVAILABLE // run /retry"
+            )
         self._refresh_all()
 
     async def _handle_journal_prompt(self, prompt: str) -> None:
@@ -1270,7 +1322,9 @@ class CyberdeckApp(App[None]):
         if self.is_mounted and self.active_module_id != "agents":
             self._activate_module("agents")
         state = self._active_agent()
-        if state: state.unread_count = 0
+        if state:
+            state.unread_count = 0
+            state.unread_message_index = None
         prompt = self.screen_stack[0].query_one("#prompt", Input)
         if self._draft_agent_id:
             previous = next((a for a in self.manager.agents if str(a.config.id) == self._draft_agent_id), None)
@@ -1435,7 +1489,7 @@ class CyberdeckApp(App[None]):
             notify=lambda message, title="MODULE", severity="information": self.notify(
                 message, title=title, severity=severity
             ),
-            copy_to_clipboard=self.copy_to_clipboard,
+            copy_to_clipboard=self._copy_text,
             services={},
         )
 
@@ -1601,7 +1655,14 @@ class CyberdeckApp(App[None]):
             operation = getattr(self.manager, action)
             await operation(state, argument) if action == "rename" else await operation(state)
             if action in {"disconnect", "archive"}: self._sync_agent_list()
-            self._write_local(f"{action} complete: {argument or state.config.name}")
+            signal = {
+                "rename": "CALLSIGN UPDATED",
+                "interrupt": "ABORT SIGNAL CONFIRMED",
+                "retry": "CARRIER REACQUIRED",
+                "disconnect": "CARRIER RELEASED",
+                "archive": "CONSTRUCT ARCHIVED",
+            }.get(action, f"{action.upper()} COMPLETE")
+            self._write_local(f"{signal} // {argument or state.config.name}")
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"{action} failed: {exc}")
         self._refresh_all()
@@ -1626,6 +1687,8 @@ class CyberdeckApp(App[None]):
         state = self._active_agent(); conversation = main.query_one("#conversation", VerticalScroll)
         conversation.remove_children()
         entries = state.transcript if state else self._system_transcript
+        if not state and not entries:
+            conversation.mount(EmptyGrid())
         if state and state.history_cursor:
             conversation.mount(Static("↑ LOAD OLDER TURNS  //  /older", classes="load-older"))
         for entry in entries: conversation.mount(TerminalMessage(entry, state))
@@ -1644,7 +1707,36 @@ class CyberdeckApp(App[None]):
         if not state: return
         for op in state.operations:
             glyph = {"succeeded": "✓", "failed": "!", "approval": "?", "running": "◐", "pending": "○"}[op.state.value]
-            view.append(ListItem(Label(f"{op.created_at:%H:%M:%S}  {op.kind:<18} {glyph} {op.summary}")))
+            trace = self._trace_class(op)
+            phase = {
+                "succeeded": "CLEAR",
+                "failed": "FAULT",
+                "approval": "INTERLOCK",
+                "running": "ACTIVE",
+                "pending": "QUEUED",
+            }[op.state.value]
+            view.append(
+                ListItem(
+                    Label(
+                        f"{op.created_at:%H:%M:%S}  {trace:<7} {phase:<9} {glyph} "
+                        f"{op.kind:<16} {op.summary}"
+                    )
+                )
+            )
+
+    @staticmethod
+    def _trace_class(operation: OperationEntry) -> str:
+        if operation.state.value == "approval":
+            return "ICE"
+        if operation.state.value == "failed":
+            return "FAULT"
+        return {
+            "commandExecution": "TRACE",
+            "fileChange": "PATCH",
+            "mcpToolCall": "PROBE",
+            "dynamicToolCall": "PROBE",
+            "webSearch": "SCAN",
+        }.get(operation.kind, "SIGNAL")
 
     def _write_local(self, text: str) -> None:
         state = self._active_agent(); (state.transcript if state else self._system_transcript).append(TranscriptEntry("system", text))
@@ -2044,8 +2136,39 @@ class CyberdeckApp(App[None]):
             text = latest.text
         if not text:
             self._write_local("nothing to copy"); return
-        self.copy_to_clipboard(text)
-        self._write_local(f"copied {len(text)} characters to clipboard")
+        try:
+            target = self._copy_text(text)
+        except RuntimeError as exc:
+            self._write_local(f"CLIPBOARD FAULT // {exc}")
+            return
+        self._write_local(
+            f"CLIPBOARD WRITE CONFIRMED // {len(text)} characters via {target}"
+        )
+
+    def _copy_text(self, text: str) -> str:
+        if self._clipboard_writer is not None:
+            self._clipboard_writer(text)
+            return "configured writer"
+        if sys.platform == "darwin":
+            executable = shutil.which("pbcopy")
+            if not executable:
+                raise RuntimeError("pbcopy is unavailable")
+            try:
+                subprocess.run(
+                    [executable],
+                    input=text,
+                    text=True,
+                    check=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"pbcopy failed: {exc}") from exc
+            return "pbcopy"
+        try:
+            self.copy_to_clipboard(text)
+        except Exception as exc:
+            raise RuntimeError(f"terminal clipboard failed: {exc}") from exc
+        return "terminal protocol"
 
     def _find_agent(self, callsign: str) -> AgentState | None:
         name = callsign.casefold()
@@ -2130,24 +2253,41 @@ class CyberdeckApp(App[None]):
         self._render_active(follow_end=False)
 
     def _agent_event(self, state: AgentState, event: AgentEvent) -> None:
-        if state is not self._active_agent(): state.unread_count += 1
+        if state is not self._active_agent() and event.kind == "assistant_delta":
+            message_index = len(state.transcript) - 1
+            if message_index >= 0 and state.unread_message_index != message_index:
+                state.unread_count += 1
+                state.unread_message_index = message_index
         if event.kind == "status":
             if event.text == "ready":
-                self._show_transition(state, "CARRIER STABLE // 通信安定", "#52e891")
+                message = (
+                    "CONSTRUCT RESTORED // 記憶復元"
+                    if state.restored
+                    else "GRID MAPPED // CARRIER STABLE"
+                )
+                self._show_transition(state, message, "#52e891")
+                state.restored = False
             elif event.text in {"processing", "working"}:
-                self._show_transition(state, "SIGNAL ENGAGED // 稼働", "#00e8f2")
+                self._show_transition(state, "CONSTRUCT ACTIVE // SIGNAL ENGAGED", "#00e8f2")
         elif event.kind == "approval":
             approval = state.pending_approvals[-1] if state.pending_approvals else None
             level, color = ice_level(state, approval) if approval else ("ICE", "#ff3b4f")
             self._show_transition(state, f"{level} INTERLOCK // 認証待機", color)
         elif event.kind in {"error", "transport_closed"}:
-            self._show_transition(state, "SIGNAL LOST // 通信断", "#ff3b4f")
+            self._show_transition(state, "GRID FRACTURE // SIGNAL LOST", "#ff3b4f")
+            state.transcript.append(
+                TranscriptEntry(
+                    "system",
+                    "GRID FRACTURE // SIGNAL LOST\n"
+                    f"{event.text}\n"
+                    "RECOVERY AVAILABLE // run /retry",
+                )
+            )
         if event.kind == "approval" and state is self._active_agent():
             self._refresh_all()
             self.call_after_refresh(self._focus_latest_approval)
             return
-        if event.kind == "error" and state is self._active_agent(): self._write_local(f"error: {event.text}")
-        elif event.kind == "assistant_delta" and state is self._active_agent():
+        if event.kind == "assistant_delta" and state is self._active_agent():
             conversation = self.screen_stack[0].query_one("#conversation", VerticalScroll)
             messages = list(conversation.query(TerminalMessage))
             expected = len(state.transcript)
@@ -2223,9 +2363,15 @@ class CyberdeckApp(App[None]):
         label = Text()
         label.append(f"{glyph} ", style=f"bold {color}")
         label.append(f"SYN::{state.config.name.upper()}", style=f"bold {color}")
-        if state.unread_count:
-            label.append(f"  +{state.unread_count}", style="bold #e9b949")
+        if state.status is AgentStatus.FIREWALL_HOLD:
+            label.append("  ATTN::ICE", style="bold #ff3b4f")
+        elif state.status is AgentStatus.ERROR:
+            label.append("  ATTN::FAULT", style="bold #ff3b4f")
+        elif state.unread_count:
+            label.append(f"  ECHO +{state.unread_count}", style="bold #e9b949")
         label.append(f"  {state.status.value}", style="#7a879a")
+        provider = (state.model_provider or state.config.provider).upper()
+        label.append(f"\n  ├─ {provider} / LOCAL", style="#607087")
         label.append(f"\n  └─ {state.config.working_directory.name}", style="#46566c")
         return label
 

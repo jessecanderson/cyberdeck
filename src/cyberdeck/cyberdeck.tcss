@@ -19,7 +19,7 @@ Screen { background: $void; color: $foreground; }
 #sidebar { width: 34; min-width: 26; background: $background; border-right: solid $surface-lighten-2; }
 #sidebar-title { width: 100%; height: 3; padding: 1 0; color: $cyan; text-style: $deck-heading-style; content-align: center middle; }
 #agents { height: 2fr; background: transparent; }
-#agents > ListItem { height: 3; padding: 0 2; color: $muted; }
+#agents > ListItem { height: 4; padding: 0 2; color: $muted; }
 #agents > ListItem.--highlight { background: $surface; color: $cyan; border-left: thick $cyan; }
 #modules-title { width: 100%; height: 2; color: $cyan; text-style: $deck-heading-style; content-align: center middle; border-top: solid $surface-lighten-2; }
 #modules { height: 1fr; min-height: 6; max-height: 16; background: transparent; }
@@ -45,13 +45,14 @@ Screen { background: $void; color: $foreground; }
     color: $cyan; border-left: thick $magenta;
 }
 #conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid $panel-lighten-1; scrollbar-color: $magenta; scrollbar-background: $surface; }
-TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: $foreground; }
+TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 1; color: $foreground; }
+EmptyGrid { width: 100%; height: 1fr; padding: 4 6; content-align: center middle; }
 .load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
 
-#operations-console { height: 10; background: $surface; border-top: solid $primary-muted; }
+#operations-console { height: 11; background: $surface; border-top: solid $primary-muted; }
 #operations-title { height: 2; padding: 0 2; color: $cyan; text-style: bold; content-align: left middle; }
 #operations-list { height: 1fr; background: transparent; }
-#operations-list > ListItem { height: 1; padding: 0 2; color: $muted; }
+#operations-list > ListItem { height: 1; padding: 0 2; color: #708396; }
 #operations-list > ListItem.--highlight { background: $primary-muted; color: $foreground; }
 
 #autocomplete {
