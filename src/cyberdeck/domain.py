@@ -20,6 +20,7 @@ class AgentCapabilities:
     model_selection: bool = False
     templates: bool = False
     remote_transport: bool = False
+    context_compaction: bool = False
 
     def supports(self, action: str) -> bool:
         return {
@@ -29,6 +30,7 @@ class AgentCapabilities:
             "interrupt": self.interrupt,
             "approvals": self.approvals,
             "history": self.history,
+            "compact": self.context_compaction,
         }.get(action, True)
 
 

@@ -221,48 +221,38 @@ class BootScreen(Screen[None]):
 
 class HelpScreen(ModalScreen[None]):
     BINDINGS: ClassVar = [("escape", "close", "Close")]
-    HELP_TEXT = """DECK COMMAND INDEX // LOCAL CONTROL
 
-/new CALLSIGN [RUNTIME] [PATH]   Initialize an uplink (defaults: configured runtime, current path)
-  e.g. /new ghost  •  /new ghost kiro ~/src/project
-/restore             Open ARCHIVE UPLINK
-/agents              List connected uplinks
-/agent               Open OPERATIVE CONTROL
-/rename NAME          Persist a new callsign
-/interrupt  /retry    Stop a turn / restore an errored uplink
-/disconnect /archive  Remove reversibly / archive and remove
-/dispatch             Open SIGNAL MULTIPLEXER
-/send AGENT MESSAGE   Send a prompt to one ready agent
-/pipe AGENT           Forward the latest agent response
-/copy [all|TEXT]      Copy response, transcript, or text
-/kill [AGENT|all]     Disconnect after confirmation
-/approve [all]        Approve latest or all pending ICE requests once
-/trust                Trust the latest ICE request for this session
-/deny                 Deny the latest ICE request
-/modules             List bundled and external deck modules
-/module NAME         Switch to an enabled deck module
-/module ACTION ARG   Install, link, update, enable, disable, or remove
-/theme [NAME]         Select a theme
-/theme import PATH    Validate and import a theme
-/journal [YYYY-MM-DD] Open a daily Markdown entry
-/today  /save         Open today / save Journal
-/about                Open system manifest
-/clear  /path        Clear view / show active path
-/help  /quit         Reference / shutdown
+    def __init__(self, commands: dict[str, str]) -> None:
+        super().__init__()
+        self.commands = commands
 
-KEYBOARD
-
-Ctrl+N new   Ctrl+R restore   Ctrl+G control   Ctrl+P switch
-Ctrl+B dispatch   Ctrl+M next module   Ctrl+L command line
-Ctrl+S save editor   Ctrl+O operations
-Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit
-"""
+    def _help_text(self) -> str:
+        width = max(map(len, self.commands), default=0)
+        rows = ["DECK COMMAND INDEX // LOCAL CONTROL", ""]
+        rows.extend(
+            f"{name:<{width}}  {description}"
+            for name, description in self.commands.items()
+        )
+        rows.extend([
+            "",
+            "KEYBOARD",
+            "",
+            "Ctrl+N new   Ctrl+R restore   Ctrl+G control   Ctrl+P switch",
+            "Ctrl+B dispatch   F6 next module   Ctrl+L command line",
+            "Ctrl+S save editor   Ctrl+O operations",
+            "Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit",
+        ])
+        return "\n".join(rows)
 
     def compose(self) -> ComposeResult:
         with Vertical(id="help-dialog"):
             yield Label("ODS // COMMAND REFERENCE // 操作一覧", id="help-title")
-            yield Static(self.HELP_TEXT, id="help-content")
+            with VerticalScroll(id="help-scroll"):
+                yield Static(self._help_text(), id="help-content")
             yield Static("ESC  RETURN", classes="modal-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#help-scroll", VerticalScroll).focus()
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -429,11 +419,24 @@ class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
     def action_cancel(self) -> None: self.dismiss(None)
 
 
+class ToggleSearchInput(Input):
+    """Filter input whose Space key toggles the highlighted result."""
+
+    BINDINGS: ClassVar = [
+        Binding("space", "toggle_result", "Select", show=False, priority=True)
+    ]
+
+    def action_toggle_result(self) -> None:
+        toggle = getattr(self.screen, "action_toggle", None)
+        if callable(toggle):
+            toggle()
+
+
 class RestoreScreen(ModalScreen[list[tuple[ThreadSummary, str]]]):
     """Searchable, multi-select archive picker. Space toggles; Enter restores."""
     BINDINGS: ClassVar = [
-        ("escape", "cancel", "Cancel"), ("space", "toggle", "Select"),
-        ("enter", "restore", "Restore"),
+        ("escape", "cancel", "Cancel"),
+        Binding("enter", "restore", "Restore", priority=True),
     ]
 
     def __init__(self, threads: list[ThreadSummary]) -> None:
@@ -445,7 +448,10 @@ class RestoreScreen(ModalScreen[list[tuple[ThreadSummary, str]]]):
     def compose(self) -> ComposeResult:
         with Vertical(id="restore-dialog"):
             yield Label("ARCHIVE UPLINK // NON-ARCHIVED INTERACTIVE THREADS", id="restore-title")
-            yield Input(placeholder="SEARCH callsign / project / transcript", id="restore-search")
+            yield ToggleSearchInput(
+                placeholder="SEARCH callsign / project / transcript",
+                id="restore-search",
+            )
             yield ListView(id="restore-list")
             yield Input(placeholder="Callsign for selected unnamed thread", id="restore-name")
             yield Static("SPACE  SELECT   ENTER  RESTORE   ESC  ABORT", id="restore-help")
@@ -485,6 +491,19 @@ class RestoreScreen(ModalScreen[list[tuple[ThreadSummary, str]]]):
         index = view.index
         self._rebuild(); view.index = index
 
+    def _move_result(self, direction: int) -> None:
+        if not self.filtered or not self.query_one("#restore-search", Input).has_focus:
+            return
+        view = self.query_one("#restore-list", ListView)
+        current = view.index if view.index is not None else 0
+        view.index = max(0, min(len(self.filtered) - 1, current + direction))
+
+    def action_previous_result(self) -> None:
+        self._move_result(-1)
+
+    def action_next_result(self) -> None:
+        self._move_result(1)
+
     def action_restore(self) -> None:
         # Enter in the search field first selects the highlighted row.
         chosen = [thread for thread in self.threads if thread.id in self.selected]
@@ -498,10 +517,6 @@ class RestoreScreen(ModalScreen[list[tuple[ThreadSummary, str]]]):
             )
             self.query_one("#restore-name", Input).focus(); return
         self.dismiss([(thread, thread.name or supplied) for thread in chosen])
-
-    @on(Input.Submitted)
-    def submitted(self) -> None:
-        self.action_restore()
 
     def action_cancel(self) -> None: self.dismiss([])
 
@@ -550,6 +565,21 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
 
     def on_mount(self) -> None: self.query_one("#control-list", ListView).index = 0
 
+    def _move_result(self, direction: int) -> None:
+        view = self.query_one("#control-list", ListView)
+        current = view.index if view.index is not None else 0
+        view.index = max(0, min(len(self.ACTIONS) - 1, current + direction))
+
+    def action_previous_result(self) -> None:
+        self._move_result(-1)
+
+    def action_next_result(self) -> None:
+        self._move_result(1)
+
+    @on(Input.Submitted, "#control-name")
+    def name_submitted(self) -> None:
+        self.query_one("#control-list", ListView).action_select_cursor()
+
     @on(ListView.Selected, "#control-list")
     def selected(self, event: ListView.Selected) -> None:
         index = event.list_view.index
@@ -567,7 +597,10 @@ class OperativeControl(ModalScreen[tuple[str, str | None] | None]):
 
 
 class AgentSwitcher(ModalScreen[AgentState | None]):
-    BINDINGS: ClassVar = [("escape", "cancel", "Close"), ("enter", "choose", "Switch")]
+    BINDINGS: ClassVar = [
+        ("escape", "cancel", "Close"),
+        ("enter", "choose", "Switch"),
+    ]
 
     def __init__(self, agents: list[AgentState], active: AgentState | None) -> None:
         super().__init__(); self.agents, self.filtered, self.active = agents, agents, active
@@ -602,11 +635,31 @@ class AgentSwitcher(ModalScreen[AgentState | None]):
         index = self.query_one("#switch-list", ListView).index
         if index is not None and index < len(self.filtered): self.dismiss(self.filtered[index])
 
+    @on(Input.Submitted, "#switch-search")
+    def search_submitted(self) -> None:
+        self.action_choose()
+
+    def _move_result(self, direction: int) -> None:
+        if not self.filtered:
+            return
+        view = self.query_one("#switch-list", ListView)
+        current = view.index if view.index is not None else 0
+        view.index = max(0, min(len(self.filtered) - 1, current + direction))
+
+    def action_previous_result(self) -> None:
+        self._move_result(-1)
+
+    def action_next_result(self) -> None:
+        self._move_result(1)
+
     def action_cancel(self) -> None: self.dismiss(None)
 
 
 class DispatchScreen(ModalScreen[tuple[list[AgentState], str] | None]):
-    BINDINGS: ClassVar = [("escape", "cancel", "Close"), ("space", "toggle", "Select"), ("ctrl+enter", "transmit", "Transmit")]
+    BINDINGS: ClassVar = [
+        ("escape", "cancel", "Close"),
+        ("ctrl+enter", "transmit", "Transmit"),
+    ]
 
     def __init__(self, agents: list[AgentState]) -> None:
         super().__init__(); self.agents, self.filtered, self.selected = agents, agents, set()
@@ -614,7 +667,7 @@ class DispatchScreen(ModalScreen[tuple[list[AgentState], str] | None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="dispatch-dialog"):
             yield Label("SIGNAL MULTIPLEXER // GUARDED DISPATCH", id="dispatch-title")
-            yield Input(placeholder="SEARCH targets", id="dispatch-search")
+            yield ToggleSearchInput(placeholder="SEARCH targets", id="dispatch-search")
             yield ListView(id="dispatch-list")
             yield Input(placeholder="Signal payload", id="dispatch-prompt")
             yield Static("SPACE  SELECT   CTRL+ENTER  TRANSMIT   ESC  ABORT", id="dispatch-help")
@@ -641,6 +694,23 @@ class DispatchScreen(ModalScreen[tuple[list[AgentState], str] | None]):
         view = self.query_one("#dispatch-list", ListView); index = view.index
         if index is None or index >= len(self.filtered): return
         self.selected.symmetric_difference_update({self.filtered[index].config.id}); self._rebuild(); view.index = index
+
+    def _move_result(self, direction: int) -> None:
+        if not self.filtered or not self.query_one("#dispatch-search", Input).has_focus:
+            return
+        view = self.query_one("#dispatch-list", ListView)
+        current = view.index if view.index is not None else 0
+        view.index = max(0, min(len(self.filtered) - 1, current + direction))
+
+    def action_previous_result(self) -> None:
+        self._move_result(-1)
+
+    def action_next_result(self) -> None:
+        self._move_result(1)
+
+    @on(Input.Submitted, "#dispatch-search")
+    def search_submitted(self) -> None:
+        self.action_toggle()
 
     def action_transmit(self) -> None:
         targets = [a for a in self.agents if a.config.id in self.selected]
@@ -714,6 +784,8 @@ class OperationDetail(ModalScreen[None]):
         with VerticalScroll(id="operation-detail"):
             yield Static(Group(*body))
             yield Static("ESC  RETURN TO OPERATIONS", classes="modal-help")
+    def on_mount(self) -> None:
+        self.query_one("#operation-detail", VerticalScroll).focus()
     def action_close(self) -> None: self.dismiss(None)
 
 
@@ -736,6 +808,9 @@ class ThemeScreen(ModalScreen[str | None]):
                 id="theme-list",
             )
             yield Static("ENTER  APPLY     ESC  RETURN", classes="modal-help")
+
+    def on_mount(self) -> None:
+        self.query_one("#theme-list", ListView).focus()
 
     @on(ListView.Selected, "#theme-list")
     def select_theme(self, event: ListView.Selected) -> None:
@@ -838,12 +913,14 @@ class CyberdeckApp(App[None]):
     TITLE = "CYBERDECK"
     BINDINGS: ClassVar = [
         ("ctrl+n", "spawn_agent", "New"), ("ctrl+r", "restore", "Restore"),
-        ("ctrl+o", "operations", "Ops"), ("ctrl+j", "next_agent", "Next"),
-        ("ctrl+k", "previous_agent", "Previous"), ("ctrl+q", "quit", "Quit"),
+        ("ctrl+o", "operations", "Ops"),
+        Binding("ctrl+j", "next_agent", "Next", priority=True),
+        Binding("ctrl+k", "previous_agent", "Previous", priority=True),
+        ("ctrl+q", "quit", "Quit"),
         Binding("ctrl+g", "agent_control", "Control", priority=True),
         Binding("ctrl+p", "agent_switcher", "Switch", priority=True),
         Binding("ctrl+b", "dispatch", "Dispatch", priority=True),
-        Binding("ctrl+m", "next_module", "Module", priority=True),
+        Binding("f6", "next_module", "Module", priority=True),
         Binding("ctrl+l", "focus_command", "Command", priority=True),
         Binding("ctrl+s", "save_module", "Save", priority=True),
         Binding("escape", "workspace_focus", "Workspace", show=False),
@@ -856,6 +933,7 @@ class CyberdeckApp(App[None]):
         "/runtimes": "show runtime availability and versions",
         "/restore": "open Archive Uplink",
         "/agents": "list connected uplinks",
+        "/switch": "select an uplink: /switch CALLSIGN",
         "/agent": "open Operative Control",
         "/rename": "persist a new callsign",
         "/interrupt": "interrupt the active turn",
@@ -872,13 +950,16 @@ class CyberdeckApp(App[None]):
         "/deny": "deny the latest ICE request",
         "/modules": "list installed deck modules",
         "/module": "activate or manage a deck module",
+        "/next-module": "cycle to the next enabled deck module",
         "/theme": "select or import a color theme",
         "/journal": "open a dated journal entry",
         "/today": "open today's journal entry",
         "/save": "save the active journal entry",
         "/about": "open system manifest",
         "/older": "load 50 older turns",
-        "/clear": "clear the active transcript",
+        "/context": "show active context usage and compaction support",
+        "/compact": "compact active provider context",
+        "/clear": "clear the local transcript display (provider context remains)",
         "/path": "show the active working directory",
         "/help": "open command reference",
         "/quit": "shut down Cyberdeck",
@@ -944,6 +1025,7 @@ class CyberdeckApp(App[None]):
         self.theme = selected_theme
         self._system_transcript: list[TranscriptEntry] = []
         self._prompt_completions: list[tuple[str, str]] = []
+        self._completion_index = 0
         self._network_phase = 0
         self._prompt_history: list[str] = []
         self._history_index: int | None = None
@@ -1027,7 +1109,7 @@ class CyberdeckApp(App[None]):
                             placeholder="jack in... type a command or message",
                             id="prompt",
                         )
-        yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^M MODULE  ^L CMD  ^S SAVE  ^O OPS  ^Q QUIT", id="shortcut-rail")
+        yield Static("^N NEW  ^R RESTORE  ^G CONTROL  ^P SWITCH  ^B DISPATCH  ^L CMD  ^S SAVE  ^O OPS  ^Q QUIT", id="shortcut-rail")
 
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
@@ -1319,17 +1401,22 @@ class CyberdeckApp(App[None]):
     @on(Input.Changed, "#prompt")
     def prompt_changed(self, event: Input.Changed) -> None:
         self._prompt_completions = self._complete(event.value)
+        self._completion_index = 0
+        self._render_prompt_completions()
+
+    def _render_prompt_completions(self) -> None:
         panel = self.screen_stack[0].query_one("#autocomplete", Static)
         if not self._prompt_completions:
             panel.display = False
             return
         rows = Text()
         for index, (value, description) in enumerate(self._prompt_completions[:6]):
+            selected = index == self._completion_index
             rows.append(
-                "TAB  " if index == 0 else "     ",
-                style="bold #e62acb" if index == 0 else "",
+                "TAB  " if selected else "     ",
+                style="bold #e62acb" if selected else "",
             )
-            rows.append(value, style="bold #00e8f2" if index == 0 else "#8ba2b3")
+            rows.append(value, style="bold #00e8f2" if selected else "#8ba2b3")
             rows.append(f"  {description}", style="#607087")
             rows.append("\n")
         panel.update(rows)
@@ -1342,7 +1429,8 @@ class CyberdeckApp(App[None]):
         prompt = self.screen_stack[0].query_one("#prompt", Input)
         if not prompt.has_focus or not self._prompt_completions:
             return
-        completion = self._prompt_completions[0][0]
+        visible = self._prompt_completions[:6]
+        completion = visible[self._completion_index][0]
         raw = prompt.value
         if raw.startswith("/") and " " not in raw:
             prompt.value = completion + (" " if completion == "/new" else "")
@@ -1397,7 +1485,11 @@ class CyberdeckApp(App[None]):
                 for theme_id, theme in self.deck_themes.items()
                 if theme_id.startswith(prefix)
             ]
-        if words and words[0] in {"/send", "/pipe", "/kill"} and len(words) == 2:
+        if (
+            words
+            and words[0] in {"/send", "/pipe", "/kill", "/switch"}
+            and len(words) == 2
+        ):
             if value.endswith(" "):
                 return []
             prefix = words[1].casefold()
@@ -1492,7 +1584,11 @@ class CyberdeckApp(App[None]):
             return
         console = self.query_one("#operations-console")
         console.display = not console.display
-        if console.display: self.query_one("#operations-list", ListView).focus()
+        if console.display:
+            operations = self.query_one("#operations-list", ListView)
+            if operations.children and operations.index is None:
+                operations.index = 0
+            operations.focus()
         else: self.query_one("#prompt", Input).focus()
 
     def action_next_agent(self) -> None: self._move_agent(1)
@@ -1731,6 +1827,24 @@ class CyberdeckApp(App[None]):
         self.screen_stack[0].query_one("#journal-editor", TextArea).focus()
 
     def action_prompt_previous(self) -> None:
+        if isinstance(self.screen, AgentSwitcher):
+            self.screen.action_previous_result()
+            return
+        if isinstance(self.screen, RestoreScreen):
+            self.screen.action_previous_result()
+            return
+        if isinstance(self.screen, OperativeControl):
+            self.screen.action_previous_result()
+            return
+        if isinstance(self.screen, DispatchScreen):
+            self.screen.action_previous_result()
+            return
+        if isinstance(self.focused, ListView):
+            self._move_focused_list(self.focused, -1)
+            return
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.scroll_up(animate=False, force=True)
+            return
         if self.screen is not self.screen_stack[0]: return
         state = self._active_agent()
         if state and state.pending_approvals:
@@ -1739,6 +1853,11 @@ class CyberdeckApp(App[None]):
             )
             return
         prompt = self.query_one("#prompt", Input)
+        if prompt.has_focus and self._prompt_completions:
+            visible_count = min(6, len(self._prompt_completions))
+            self._completion_index = (self._completion_index - 1) % visible_count
+            self._render_prompt_completions()
+            return
         if not prompt.has_focus or not self._prompt_history: return
         if self._history_index is None:
             self._history_draft = prompt.value; self._history_index = len(self._prompt_history) - 1
@@ -1747,6 +1866,24 @@ class CyberdeckApp(App[None]):
         prompt.cursor_position = len(prompt.value)
 
     def action_prompt_next(self) -> None:
+        if isinstance(self.screen, AgentSwitcher):
+            self.screen.action_next_result()
+            return
+        if isinstance(self.screen, RestoreScreen):
+            self.screen.action_next_result()
+            return
+        if isinstance(self.screen, OperativeControl):
+            self.screen.action_next_result()
+            return
+        if isinstance(self.screen, DispatchScreen):
+            self.screen.action_next_result()
+            return
+        if isinstance(self.focused, ListView):
+            self._move_focused_list(self.focused, 1)
+            return
+        if isinstance(self.focused, VerticalScroll):
+            self.focused.scroll_down(animate=False, force=True)
+            return
         if self.screen is not self.screen_stack[0]: return
         state = self._active_agent()
         if state and state.pending_approvals:
@@ -1755,12 +1892,25 @@ class CyberdeckApp(App[None]):
             )
             return
         prompt = self.query_one("#prompt", Input)
+        if prompt.has_focus and self._prompt_completions:
+            visible_count = min(6, len(self._prompt_completions))
+            self._completion_index = (self._completion_index + 1) % visible_count
+            self._render_prompt_completions()
+            return
         if not prompt.has_focus or self._history_index is None: return
         if self._history_index < len(self._prompt_history) - 1:
             self._history_index += 1; prompt.value = self._prompt_history[self._history_index]
         else:
             self._history_index = None; prompt.value = self._history_draft
         prompt.cursor_position = len(prompt.value)
+
+    @staticmethod
+    def _move_focused_list(view: ListView, direction: int) -> None:
+        count = len(view.children)
+        if not count:
+            return
+        current = view.index if view.index is not None else 0
+        view.index = max(0, min(count - 1, current + direction))
 
     def action_agent_control(self) -> None:
         state = self._active_agent()
@@ -1896,7 +2046,8 @@ class CyberdeckApp(App[None]):
         try: parts = shlex.split(command_line)
         except ValueError as exc: self._write_local(f"command parse error: {exc}"); return
         command, args = parts[0].lower(), parts[1:]
-        if command in {"/help", "/?"}: self.push_screen(HelpScreen())
+        if command in {"/help", "/?"}:
+            self.push_screen(HelpScreen(self._all_local_commands()))
         elif command == "/about": self.push_screen(AboutScreen(self._system_manifest()))
         elif command == "/restore": self.action_restore()
         elif command == "/new":
@@ -1936,6 +2087,22 @@ class CyberdeckApp(App[None]):
                 f"{a.config.working_directory}"
                 for i, a in enumerate(self.manager.agents)
             ) or "no uplinks connected")
+        elif command == "/switch":
+            if len(args) != 1:
+                self._write_local("usage: /switch CALLSIGN")
+            else:
+                target = next(
+                    (
+                        agent
+                        for agent in self.manager.agents
+                        if agent.config.name.casefold() == args[0].casefold()
+                    ),
+                    None,
+                )
+                if target is None:
+                    self._write_local(f"unknown uplink: {args[0]}")
+                else:
+                    self._switch_result(target)
         elif command == "/runtimes":
             rows = []
             for runtime in self.manager.runtime_preflights(refresh=True):
@@ -1982,6 +2149,11 @@ class CyberdeckApp(App[None]):
                 self.notify(f"Unknown module: {args[0]}", severity="error")
             else:
                 self._activate_module(args[0].casefold())
+        elif command == "/next-module":
+            if args:
+                self._write_local("usage: /next-module")
+            else:
+                self.action_next_module()
         elif command == "/theme":
             self._theme_command(args)
         elif command in {"/journal", "/today", "/save"}:
@@ -1995,8 +2167,54 @@ class CyberdeckApp(App[None]):
         elif command == "/older":
             state = self._active_agent()
             if state: self._load_older(state)
+        elif command == "/context":
+            state = self._active_agent()
+            if not state:
+                self._write_local("No active uplink.")
+            elif args:
+                self._write_local("usage: /context")
+            else:
+                if state.context_percentage is not None:
+                    usage = f"{state.context_percentage:.1f}%"
+                elif state.context_window:
+                    percent = state.context_tokens / state.context_window * 100
+                    usage = (
+                        f"{state.context_tokens:,}/{state.context_window:,} tokens "
+                        f"({percent:.1f}%)"
+                    )
+                else:
+                    usage = "not reported"
+                support = "READY" if state.capabilities.context_compaction else "UNAVAILABLE"
+                self._write_local(
+                    f"CONTEXT MATRIX // {state.config.name}\n"
+                    f"USAGE   {usage}\n"
+                    f"COMPACT {support} // /compact"
+                )
+        elif command == "/compact":
+            state = self._active_agent()
+            if not state:
+                self._write_local("No active uplink.")
+            elif args:
+                self._write_local("usage: /compact")
+            elif not state.capabilities.context_compaction:
+                self._write_local(
+                    f"{state.config.provider} does not expose context compaction"
+                )
+            else:
+                self._compact_context(state)
         elif command == "/clear":
-            (self._active_agent().transcript if self._active_agent() else self._system_transcript).clear(); self._render_active()
+            if args:
+                self._write_local(
+                    "usage: /clear // clears display only; use /compact for context"
+                )
+            else:
+                target = (
+                    self._active_agent().transcript
+                    if self._active_agent()
+                    else self._system_transcript
+                )
+                target.clear()
+                self._render_active()
         elif command == "/path": self._write_local(str(self._active_agent().config.working_directory if self._active_agent() else Path.cwd()))
         elif command == "/agent": self.action_agent_control()
         elif command == "/dispatch": self.action_dispatch()
@@ -2495,6 +2713,28 @@ class CyberdeckApp(App[None]):
             self._write_local(f"history load failed: {exc}")
         self._render_active(follow_end=False)
 
+    @work(exclusive=False)
+    async def _compact_context(self, state: AgentState) -> None:
+        state.transcript.append(
+            TranscriptEntry("system", "MNEMONIC COMPRESSION // CONTEXT COMPACTION STARTED")
+        )
+        self._refresh_all()
+        try:
+            await self.manager.compact_context(state)
+        except Exception as exc:  # noqa: BLE001
+            state.transcript.append(
+                TranscriptEntry(
+                    "system",
+                    f"CONTEXT COMPACTION FAILED // {exc}\n"
+                    "RECOVERY AVAILABLE // run /retry if the uplink was lost",
+                )
+            )
+        else:
+            state.transcript.append(
+                TranscriptEntry("system", "MNEMONIC COMPRESSION COMPLETE // CONTEXT FREED")
+            )
+        self._refresh_all()
+
     def _agent_event(self, state: AgentState, event: AgentEvent) -> None:
         if state is not self._active_agent() and event.kind == "assistant_delta":
             message_index = len(state.transcript) - 1
@@ -2529,7 +2769,7 @@ class CyberdeckApp(App[None]):
         if event.kind == "approval" and state is self._active_agent():
             # The approval reveal owns the final scroll position. Avoid racing it
             # against the transcript's ordinary follow-end callback.
-            self._refresh_agent_labels()
+            self._refresh_agent_label(state)
             self._render_active(follow_end=False)
             self.call_after_refresh(lambda: self._restore_ice_input(state))
             return
@@ -2544,9 +2784,13 @@ class CyberdeckApp(App[None]):
                 conversation.mount(TerminalMessage(state.transcript[-1], state))
             elif messages:
                 messages[-1].refresh(layout=True)
-            self._refresh_agent_labels()
+            self._refresh_agent_label(state)
             self._update_rails()
             self.call_after_refresh(lambda: conversation.scroll_end(animate=False))
+            return
+        if state is not self._active_agent():
+            self._refresh_agent_label(state)
+            self._update_rails()
             return
         self._refresh_all()
 
@@ -2601,6 +2845,15 @@ class CyberdeckApp(App[None]):
             return
         for item, state in zip(view.children, self.manager.agents, strict=False):
             item.query_one(Label).update(self._agent_label(state))
+
+    def _refresh_agent_label(self, state: AgentState) -> None:
+        try:
+            index = self.manager.agents.index(state)
+            view = self.screen_stack[0].query_one("#agents", ListView)
+            item = list(view.children)[index]
+        except (ValueError, IndexError, NoMatches):
+            return
+        item.query_one(Label).update(self._agent_label(state))
 
     def _agent_label(self, state: AgentState) -> Text:
         color = {

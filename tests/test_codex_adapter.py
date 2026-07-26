@@ -86,8 +86,32 @@ async def test_interrupt_uses_active_turn_and_clears_it() -> None:
         "params": {"threadId": "thread-1", "turnId": "turn-2"},
     }
     adapter._pending[1].set_result({})
+    await adapter._handle_notification(
+        {
+            "method": "item/completed",
+            "params": {"item": {"type": "contextCompaction", "id": "compact-1"}},
+        }
+    )
     await task
     assert adapter.active_turn_id is None
+
+
+@pytest.mark.asyncio
+async def test_compact_context_uses_thread_compact_start() -> None:
+    adapter = CodexAppServerAdapter()
+    writer = Writer()
+    adapter.process = type("Process", (), {"stdin": writer})()
+    adapter.thread_id = "thread-7"
+
+    task = asyncio.create_task(adapter.compact_context())
+    await asyncio.sleep(0)
+    assert json.loads(writer.data) == {
+        "id": 1,
+        "method": "thread/compact/start",
+        "params": {"threadId": "thread-7"},
+    }
+    adapter._pending[1].set_result({})
+    await task
 
 
 @pytest.mark.asyncio

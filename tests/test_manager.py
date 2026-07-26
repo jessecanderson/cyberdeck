@@ -18,11 +18,13 @@ class FakeAdapter:
         self.names = []
         self.queue = []
         self.approvals = []
+        self.compacted = False
         self.capabilities = AgentCapabilities(
             load_session=True,
             history=True,
             rename=True,
             archive=True,
+            context_compaction=True,
         )
 
     async def events(self):
@@ -38,6 +40,7 @@ class FakeAdapter:
 
     async def set_thread_name(self, thread_id, name): self.names.append((thread_id, name))
     async def interrupt_turn(self): pass
+    async def compact_context(self): self.compacted = True
     async def archive_thread(self): pass
     async def respond_approval(self, request_id, decision):
         self.approvals.append((request_id, decision))
@@ -49,6 +52,39 @@ class FakeAdapter:
 
 def manager() -> AgentManager:
     return AgentManager(lambda state, event: None, adapter_factory=FakeAdapter)
+
+
+@pytest.mark.asyncio
+async def test_compact_context_uses_provider_and_returns_agent_ready() -> None:
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    adapter = FakeAdapter()
+    deck._adapters[str(state.config.id)] = adapter
+    state.capabilities = adapter.capabilities
+    state.context_tokens = 42_000
+
+    await deck.compact_context(state)
+
+    assert adapter.compacted is True
+    assert state.status is AgentStatus.READY
+    assert state.current_activity == "context compacted"
+    assert state.context_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_compact_context_rejects_busy_or_unsupported_agent() -> None:
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.PROCESSING)
+    state.capabilities = AgentCapabilities(context_compaction=True)
+    deck._adapters[str(state.config.id)] = FakeAdapter()
+
+    with pytest.raises(ValueError, match="wait for READY"):
+        await deck.compact_context(state)
+
+    state.status = AgentStatus.READY
+    state.capabilities = AgentCapabilities(context_compaction=False)
+    with pytest.raises(ValueError, match="does not support"):
+        await deck.compact_context(state)
 
 
 @pytest.mark.asyncio

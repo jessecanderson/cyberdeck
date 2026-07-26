@@ -38,6 +38,7 @@ class CodexAppServerAdapter:
         self._events: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
+        self._compaction_done: asyncio.Future[None] | None = None
         self.cwd: Path | None = None
         self.model: str | None = None
         self.model_provider: str = "codex"
@@ -50,6 +51,7 @@ class CodexAppServerAdapter:
             approvals=True,
             tool_events=True,
             model_selection=True,
+            context_compaction=True,
         )
         self._intentional_shutdown = False
 
@@ -200,6 +202,18 @@ class CodexAppServerAdapter:
         )
         self.active_turn_id = None
 
+    async def compact_context(self) -> None:
+        if not self.thread_id:
+            raise CodexProtocolError("Agent has not started")
+        if self._compaction_done and not self._compaction_done.done():
+            raise CodexProtocolError("Context compaction is already running")
+        self._compaction_done = asyncio.get_running_loop().create_future()
+        try:
+            await self._request("thread/compact/start", {"threadId": self.thread_id})
+            await self._compaction_done
+        finally:
+            self._compaction_done = None
+
     async def archive_thread(self) -> None:
         if not self.thread_id:
             raise CodexProtocolError("Agent has not started")
@@ -218,6 +232,8 @@ class CodexAppServerAdapter:
         for task in (self._reader_task, self._stderr_task):
             if task:
                 task.cancel()
+        if self._compaction_done and not self._compaction_done.done():
+            self._compaction_done.cancel()
         for future in self._pending.values():
             if not future.done():
                 future.cancel()
@@ -296,6 +312,8 @@ class CodexAppServerAdapter:
         for future in self._pending.values():
             if not future.done():
                 future.set_exception(error)
+        if self._compaction_done and not self._compaction_done.done():
+            self._compaction_done.set_exception(error)
         await self._events.put(AgentEvent("transport_closed", reason))
 
     async def _read_stderr(self) -> None:
@@ -318,8 +336,18 @@ class CodexAppServerAdapter:
             )
         elif method in {"item/started", "item/completed"}:
             item = params.get("item") or {}
+            if (
+                method == "item/completed"
+                and item.get("type") == "contextCompaction"
+                and self._compaction_done
+                and not self._compaction_done.done()
+            ):
+                self._compaction_done.set_result(None)
             if item.get("type") not in {"userMessage", "agentMessage", "reasoning"}:
                 await self._events.put(AgentEvent("operation", method=method, params=item))
+        elif method == "thread/compacted":
+            if self._compaction_done and not self._compaction_done.done():
+                self._compaction_done.set_result(None)
         elif method == "thread/tokenUsage/updated":
             await self._events.put(AgentEvent("token_usage", params=params))
         elif method == "turn/completed":

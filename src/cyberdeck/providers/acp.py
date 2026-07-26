@@ -139,6 +139,8 @@ class AcpAgentAdapter:
         if version != 1:
             raise AcpProtocolError(f"ACP protocol version 1 required; agent returned {version!r}")
         self.agent_capabilities = initialized.get("agentCapabilities") or {}
+        self.agent_info = initialized.get("agentInfo") or {}
+        is_kiro = "kiro" in str(self.agent_info.get("name", "")).casefold()
         self.capabilities = AgentCapabilities(
             load_session=bool(self.agent_capabilities.get("loadSession")),
             # ACP session/load restores provider context, but does not define a
@@ -148,8 +150,10 @@ class AcpAgentAdapter:
             approvals=True,
             tool_events=True,
             model_selection=bool(self.session_modes),
+            # Context compaction is not part of ACP v1. Kiro exposes it through
+            # its documented, strictly shaped slash-command extension.
+            context_compaction=is_kiro,
         )
-        self.agent_info = initialized.get("agentInfo") or {}
         self.model = str(self.agent_info.get("name") or "ACP")
 
     async def send(self, prompt: str) -> None:
@@ -169,6 +173,19 @@ class AcpAgentAdapter:
         if not self.thread_id:
             raise AcpProtocolError("ACP session has not started")
         await self._notify("session/cancel", {"sessionId": self.thread_id})
+
+    async def compact_context(self) -> None:
+        if not self.thread_id:
+            raise AcpProtocolError("ACP session has not started")
+        if not self.capabilities.context_compaction:
+            raise AcpProtocolError("This ACP agent does not expose context compaction")
+        await self._request(
+            "_kiro.dev/commands/execute",
+            {
+                "sessionId": self.thread_id,
+                "command": {"command": "compact", "args": {}},
+            },
+        )
 
     async def respond_approval(self, request_id: int | str, decision: str) -> None:
         options = self._permission_options.get(request_id, [])

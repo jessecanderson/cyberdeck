@@ -123,7 +123,8 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #help-dialog { height: 32; }
 #restore-dialog { width: 100; height: 80%; border: double $magenta; }
 #spawn-title, #help-title, #restore-title { height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244; }
-#help-content { height: 1fr; padding: 1; }
+#help-scroll { height: 1fr; }
+#help-content { height: auto; padding: 1; }
 #restore-search, #restore-name { height: 3; margin-top: 1; border: tall #1a4052; background: #071019; }
 #restore-list { height: 1fr; margin: 1 0; background: #050a10; }
 #restore-list > ListItem { height: 3; padding: 0 1; color: $muted; }

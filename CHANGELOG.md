@@ -3,6 +3,31 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.1] - 2026-07-26
+
+### Added
+
+- Provider-aware `/context` diagnostics and `/compact` context compaction for
+  Codex App Server and Kiro's documented ACP command extension.
+- Direct `/switch CALLSIGN` navigation with callsign autocomplete.
+- `/next-module` and `F6` as reliable module-cycling controls.
+
+### Changed
+
+- Generate the scrollable command reference from the live command registry so
+  built-in and module commands cannot silently disappear from `/help`.
+- Give `Ctrl+J` and `Ctrl+K` priority over the focused prompt and preserve
+  wraparound navigation with large agent lists.
+- Navigate the `Ctrl+P` Uplink Matrix with Up/Down directly from its search
+  field, and use Up/Down plus Tab to select prompt autocomplete suggestions.
+- Route arrow keys consistently through hotkey-opened overlays: searchable
+  Restore and Dispatch lists retain typing focus, Operative Control navigates
+  its actions, and scrollable Help and operation details retain keyboard scroll.
+- Refresh only the affected agent row for streamed background events rather
+  than rebuilding the active transcript and every sidebar label.
+- Clarify that `/clear` clears Cyberdeck's local display while provider context
+  remains intact; use `/compact` to reduce provider context.
+
 ## [0.3.0] - 2026-07-26
 
 ### Added
