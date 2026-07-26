@@ -254,10 +254,26 @@ class AgentManager:
                     else "awaiting input"
                 )
             elif event.kind == "assistant_delta":
-                if state.transcript and state.transcript[-1].role == "assistant":
-                    state.transcript[-1].text += event.text
+                latest = state.transcript[-1] if state.transcript else None
+                same_message = (
+                    latest is not None
+                    and latest.role == "assistant"
+                    and (
+                        event.message_id is None
+                        or latest.source_id == event.message_id
+                    )
+                )
+                if same_message:
+                    assert latest is not None
+                    latest.text += event.text
                 else:
-                    state.transcript.append(TranscriptEntry("assistant", event.text))
+                    state.transcript.append(
+                        TranscriptEntry(
+                            "assistant",
+                            event.text,
+                            source_id=event.message_id,
+                        )
+                    )
                 state.status = AgentStatus.PROCESSING
                 state.current_activity = "streaming response"
             elif event.kind == "operation":

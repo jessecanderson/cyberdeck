@@ -45,7 +45,7 @@ Screen { background: $void; color: $foreground; }
     color: $cyan; border-left: thick $magenta;
 }
 #conversation { height: 1fr; margin: 0 1; padding: 1 1; border: solid $panel-lighten-1; scrollbar-color: $magenta; scrollbar-background: $surface; }
-TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 0; color: $foreground; }
+TerminalMessage { width: 100%; height: auto; min-height: 1; margin-bottom: 1; color: $foreground; }
 EmptyGrid { width: 100%; height: 1fr; padding: 4 6; content-align: center middle; }
 .load-older { height: 2; color: $cyan; text-style: bold; content-align: center middle; }
 

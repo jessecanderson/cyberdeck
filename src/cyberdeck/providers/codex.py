@@ -288,7 +288,13 @@ class CodexAppServerAdapter:
         method = message.get("method", "")
         params = message.get("params") or {}
         if method == "item/agentMessage/delta":
-            await self._events.put(AgentEvent("assistant_delta", params.get("delta", "")))
+            await self._events.put(
+                AgentEvent(
+                    "assistant_delta",
+                    params.get("delta", ""),
+                    message_id=params.get("itemId"),
+                )
+            )
         elif method in {"item/started", "item/completed"}:
             item = params.get("item") or {}
             if item.get("type") not in {"userMessage", "agentMessage", "reasoning"}:

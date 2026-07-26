@@ -119,8 +119,7 @@ async def test_local_help_command_does_not_require_agent() -> None:
 async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> None:
     copied: list[str] = []
     monkeypatch.setattr(CyberdeckApp, "_executable_version", staticmethod(lambda _name: "codex 1.2.3"))
-    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
-        pilot.app.copy_to_clipboard = copied.append
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         await pilot.app._run_local_command("/about")
         await pilot.pause()
         assert isinstance(pilot.app.screen, AboutScreen)
@@ -311,7 +310,7 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
 @pytest.mark.asyncio
 async def test_copy_defaults_to_latest_assistant_response() -> None:
     copied: list[str] = []
-    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
         state.transcript.extend([
             TranscriptEntry("assistant", "first"),
@@ -319,9 +318,27 @@ async def test_copy_defaults_to_latest_assistant_response() -> None:
             TranscriptEntry("assistant", "latest"),
         ])
         await pilot.app._add_agent_item(state, select=True)
-        pilot.app.copy_to_clipboard = copied.append
         await pilot.app._run_local_command("/copy")
         assert copied == ["latest"]
+
+
+def test_macos_clipboard_uses_pbcopy(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[tuple[list[str], str]] = []
+
+    def run(command, *, input, text, check, timeout):
+        assert text is True
+        assert check is True
+        assert timeout == 2
+        calls.append((command, input))
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr("cyberdeck.app.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("cyberdeck.app.subprocess.run", run)
+
+    target = CyberdeckApp(skip_boot=True)._copy_text("deck signal")
+
+    assert target == "pbcopy"
+    assert calls == [(["/usr/bin/pbcopy"], "deck signal")]
 
 
 @pytest.mark.asyncio

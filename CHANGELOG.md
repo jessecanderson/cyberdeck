@@ -29,6 +29,11 @@ All notable changes to Cyberdeck are documented here. The project follows
 
 ### Fixed
 
+- Write `/copy` through the native macOS clipboard utility and report failures
+  instead of claiming success after an unsupported terminal clipboard request.
+- Preserve Codex agent-message item identity so separate streamed messages no
+  longer collapse into one transcript line.
+- Add visual spacing between distinct transcript messages.
 - Reset the active-agent header after the final operative disconnects instead
   of leaving stale agent information visible.
 - Guard the POST renderer against its worker starting before boot widgets have

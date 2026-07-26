@@ -182,3 +182,25 @@ async def test_token_usage_notification_becomes_agent_event() -> None:
     assert event is not None
     assert event.kind == "token_usage"
     assert event.params == params
+
+
+@pytest.mark.asyncio
+async def test_agent_message_delta_preserves_item_identity() -> None:
+    adapter = CodexAppServerAdapter()
+    await adapter._handle_notification(
+        {
+            "method": "item/agentMessage/delta",
+            "params": {
+                "threadId": "thread-1",
+                "turnId": "turn-1",
+                "itemId": "message-7",
+                "delta": "Signal acquired.",
+            },
+        }
+    )
+
+    event = await adapter._events.get()
+    assert event is not None
+    assert event.kind == "assistant_delta"
+    assert event.message_id == "message-7"
+    assert event.text == "Signal acquired."

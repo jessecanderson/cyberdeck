@@ -40,6 +40,7 @@ class TranscriptEntry:
     role: str
     text: str
     created_at: datetime = field(default_factory=datetime.now)
+    source_id: str | None = None
 
 
 @dataclass(slots=True)
@@ -135,9 +136,23 @@ def map_history_turns(turns: list[dict[str, Any]], next_cursor: str | None = Non
                 text = item.get("text") or "".join(
                     part.get("text", "") for part in item.get("content", []) if isinstance(part, dict)
                 )
-                page.transcript.append(TranscriptEntry("user", text, created))
+                page.transcript.append(
+                    TranscriptEntry(
+                        "user",
+                        text,
+                        created,
+                        str(item["id"]) if item.get("id") is not None else None,
+                    )
+                )
             elif item_type == "agentMessage":
-                page.transcript.append(TranscriptEntry("assistant", item.get("text", ""), created))
+                page.transcript.append(
+                    TranscriptEntry(
+                        "assistant",
+                        item.get("text", ""),
+                        created,
+                        str(item["id"]) if item.get("id") is not None else None,
+                    )
+                )
             elif item_type in {
                 "commandExecution",
                 "fileChange",

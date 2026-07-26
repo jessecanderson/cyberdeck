@@ -10,6 +10,7 @@ from typing import Any, Protocol
 class AgentEvent:
     kind: str
     text: str = ""
+    message_id: str | None = None
     request_id: int | str | None = None
     method: str = ""
     params: dict[str, Any] | None = None

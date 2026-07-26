@@ -9,6 +9,7 @@ import random
 import shlex
 import shutil
 import subprocess
+import sys
 from collections.abc import Awaitable, Callable
 from datetime import date, datetime
 from importlib.metadata import version as package_version
@@ -275,8 +276,12 @@ class AboutScreen(ModalScreen[None]):
             yield Static("C  COPY DIAGNOSTICS     ESC  RETURN", classes="modal-help")
 
     def action_copy(self) -> None:
-        self.app.copy_to_clipboard(self.manifest)
-        self.notify("System manifest copied", title="DIAGNOSTICS")
+        try:
+            self.app._copy_text(self.manifest)
+        except RuntimeError as exc:
+            self.notify(str(exc), title="CLIPBOARD FAULT", severity="error")
+        else:
+            self.notify("System manifest copied", title="DIAGNOSTICS")
 
     def action_close(self) -> None:
         self.dismiss(None)
@@ -831,6 +836,7 @@ class CyberdeckApp(App[None]):
         config_store: ConfigStore | None = None,
         journal_store: JournalStore | None = None,
         module_registry: ModuleRegistry | None = None,
+        clipboard_writer: Callable[[str], None] | None = None,
     ) -> None:
         super().__init__(); self.skip_boot = skip_boot
         self.manager = manager or AgentManager(self._agent_event)
@@ -840,6 +846,7 @@ class CyberdeckApp(App[None]):
         self.deck_config: DeckConfig = self.config_store.load()
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
         self.module_registry = module_registry or ModuleRegistry()
+        self._clipboard_writer = clipboard_writer
         self.module_registry.apply_pending_updates()
         self.deck_themes, self._theme_errors = discover_themes()
         for deck_theme in self.deck_themes.values():
@@ -1476,7 +1483,7 @@ class CyberdeckApp(App[None]):
             notify=lambda message, title="MODULE", severity="information": self.notify(
                 message, title=title, severity=severity
             ),
-            copy_to_clipboard=self.copy_to_clipboard,
+            copy_to_clipboard=self._copy_text,
             services={},
         )
 
@@ -2123,8 +2130,39 @@ class CyberdeckApp(App[None]):
             text = latest.text
         if not text:
             self._write_local("nothing to copy"); return
-        self.copy_to_clipboard(text)
-        self._write_local(f"copied {len(text)} characters to clipboard")
+        try:
+            target = self._copy_text(text)
+        except RuntimeError as exc:
+            self._write_local(f"CLIPBOARD FAULT // {exc}")
+            return
+        self._write_local(
+            f"CLIPBOARD WRITE CONFIRMED // {len(text)} characters via {target}"
+        )
+
+    def _copy_text(self, text: str) -> str:
+        if self._clipboard_writer is not None:
+            self._clipboard_writer(text)
+            return "configured writer"
+        if sys.platform == "darwin":
+            executable = shutil.which("pbcopy")
+            if not executable:
+                raise RuntimeError("pbcopy is unavailable")
+            try:
+                subprocess.run(
+                    [executable],
+                    input=text,
+                    text=True,
+                    check=True,
+                    timeout=2,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                raise RuntimeError(f"pbcopy failed: {exc}") from exc
+            return "pbcopy"
+        try:
+            self.copy_to_clipboard(text)
+        except Exception as exc:
+            raise RuntimeError(f"terminal clipboard failed: {exc}") from exc
+        return "terminal protocol"
 
     def _find_agent(self, callsign: str) -> AgentState | None:
         name = callsign.casefold()
