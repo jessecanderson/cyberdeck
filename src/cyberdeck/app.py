@@ -945,7 +945,9 @@ class CyberdeckApp(App[None]):
 
     def on_mount(self) -> None:
         self.query_one("#operations-console").display = False
-        self.query_one("#state-transition").display = False
+        # Keep the transition rail in layout so transient alerts never resize the
+        # conversation viewport; visibility hides only its paint.
+        self.query_one("#state-transition").visible = False
         for module_id, widget in self.module_widgets.items():
             widget.display = module_id == "agents"
         self._update_rails(); self.set_interval(1, self._update_rails)
@@ -1093,13 +1095,13 @@ class CyberdeckApp(App[None]):
         self._transition_serial += 1
         serial = self._transition_serial
         banner.update(Text(f"▶ {message} // {state.config.name.upper()}", style=f"bold {color}"))
-        banner.display = True
+        banner.visible = True
         self.set_timer(2.4, lambda: self._hide_transition(serial))
 
     def _hide_transition(self, serial: int) -> None:
         if serial == self._transition_serial:
             try:
-                self.screen_stack[0].query_one("#state-transition", Static).display = False
+                self.screen_stack[0].query_one("#state-transition", Static).visible = False
             except (IndexError, NoMatches):
                 return
 
@@ -1181,7 +1183,9 @@ class CyberdeckApp(App[None]):
             self._write_local(f"{state.config.name} is {state.status.value.upper()}; wait for READY"); return
         try: await self.manager.send(state, prompt)
         except Exception as exc:  # noqa: BLE001
-            self._write_local(f"transmission failed: {exc}")
+            self._write_local(
+                f"TRANSMISSION FAILED // {exc}\nRECOVERY AVAILABLE // run /retry"
+            )
         self._refresh_all()
 
     async def _handle_journal_prompt(self, prompt: str) -> None:
@@ -1318,7 +1322,9 @@ class CyberdeckApp(App[None]):
         if self.is_mounted and self.active_module_id != "agents":
             self._activate_module("agents")
         state = self._active_agent()
-        if state: state.unread_count = 0
+        if state:
+            state.unread_count = 0
+            state.unread_message_index = None
         prompt = self.screen_stack[0].query_one("#prompt", Input)
         if self._draft_agent_id:
             previous = next((a for a in self.manager.agents if str(a.config.id) == self._draft_agent_id), None)
@@ -2247,7 +2253,11 @@ class CyberdeckApp(App[None]):
         self._render_active(follow_end=False)
 
     def _agent_event(self, state: AgentState, event: AgentEvent) -> None:
-        if state is not self._active_agent(): state.unread_count += 1
+        if state is not self._active_agent() and event.kind == "assistant_delta":
+            message_index = len(state.transcript) - 1
+            if message_index >= 0 and state.unread_message_index != message_index:
+                state.unread_count += 1
+                state.unread_message_index = message_index
         if event.kind == "status":
             if event.text == "ready":
                 message = (
@@ -2256,6 +2266,7 @@ class CyberdeckApp(App[None]):
                     else "GRID MAPPED // CARRIER STABLE"
                 )
                 self._show_transition(state, message, "#52e891")
+                state.restored = False
             elif event.text in {"processing", "working"}:
                 self._show_transition(state, "CONSTRUCT ACTIVE // SIGNAL ENGAGED", "#00e8f2")
         elif event.kind == "approval":
@@ -2264,12 +2275,19 @@ class CyberdeckApp(App[None]):
             self._show_transition(state, f"{level} INTERLOCK // 認証待機", color)
         elif event.kind in {"error", "transport_closed"}:
             self._show_transition(state, "GRID FRACTURE // SIGNAL LOST", "#ff3b4f")
+            state.transcript.append(
+                TranscriptEntry(
+                    "system",
+                    "GRID FRACTURE // SIGNAL LOST\n"
+                    f"{event.text}\n"
+                    "RECOVERY AVAILABLE // run /retry",
+                )
+            )
         if event.kind == "approval" and state is self._active_agent():
             self._refresh_all()
             self.call_after_refresh(self._focus_latest_approval)
             return
-        if event.kind == "error" and state is self._active_agent(): self._write_local(f"error: {event.text}")
-        elif event.kind == "assistant_delta" and state is self._active_agent():
+        if event.kind == "assistant_delta" and state is self._active_agent():
             conversation = self.screen_stack[0].query_one("#conversation", VerticalScroll)
             messages = list(conversation.query(TerminalMessage))
             expected = len(state.transcript)

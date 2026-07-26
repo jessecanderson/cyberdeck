@@ -100,6 +100,7 @@ class AgentState:
     model_provider: str = "codex"
     current_activity: str = "initializing uplink"
     unread_count: int = 0
+    unread_message_index: int | None = None
     history_cursor: str | None = None
     restored: bool = False
     context_tokens: int = 0

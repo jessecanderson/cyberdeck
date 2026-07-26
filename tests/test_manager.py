@@ -101,6 +101,20 @@ async def test_dispatch_rejects_busy_target_before_any_send() -> None:
 
 
 @pytest.mark.asyncio
+async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> None:
+    deck = manager(); state, adapter = attach(deck, "ghost")
+    adapter.fail_send = True
+
+    with pytest.raises(RuntimeError, match="radio failure"):
+        await deck.send(state, "unaccepted prompt")
+
+    assert state.transcript == []
+    assert state.status is AgentStatus.ERROR
+    assert state.current_activity == "transmission failed"
+    assert state.error_message == "radio failure"
+
+
+@pytest.mark.asyncio
 async def test_approval_is_owned_by_agent_until_answered() -> None:
     deck = manager(); state, adapter = attach(deck, "ghost")
     adapter.queue.append(AgentEvent(

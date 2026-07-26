@@ -26,6 +26,8 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Updated lifecycle controls, agent switching, dispatch, and operation detail
   copy to use the shared ODS vocabulary.
 - Report the installed Cyberdeck version during the Codex app-server handshake.
+- Keep transient grid alerts in a reserved rail so the conversation viewport
+  does not jump when agent state changes.
 
 ### Fixed
 
@@ -36,6 +38,17 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Add visual spacing between distinct transcript messages.
 - Reset the active-agent header after the final operative disconnects instead
   of leaving stale agent information visible.
+- Accept large newline-delimited Codex protocol messages produced by repository
+  reviews and other tool-heavy turns.
+- Surface transport failure details with explicit `/retry` recovery guidance.
+- Roll back prompts rejected before `turn/start` is accepted and leave the
+  affected agent in a recoverable error state.
+- Count unread background assistant messages instead of individual streaming
+  and status events.
+- Show restoration messaging only for the initial restored-agent ready event.
+- Validate every managed module environment path before recursive cleanup.
+- Preserve the positional `AgentEvent` constructor contract for external
+  providers after adding streamed-message identity.
 - Guard the POST renderer against its worker starting before boot widgets have
   finished mounting.
 

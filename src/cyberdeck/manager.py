@@ -135,10 +135,19 @@ class AgentManager:
         return page
 
     async def send(self, state: AgentState, prompt: str) -> None:
-        state.transcript.append(TranscriptEntry("user", prompt))
+        entry = TranscriptEntry("user", prompt)
+        state.transcript.append(entry)
         state.status = AgentStatus.PROCESSING
         state.current_activity = "generating response"
-        await self._adapters[str(state.config.id)].send(prompt)
+        try:
+            await self._adapters[str(state.config.id)].send(prompt)
+        except Exception as exc:
+            if entry in state.transcript:
+                state.transcript.remove(entry)
+            state.status = AgentStatus.ERROR
+            state.current_activity = "transmission failed"
+            state.error_message = str(exc)
+            raise
 
     async def rename(self, state: AgentState, name: str) -> None:
         name = name.strip()
@@ -217,6 +226,9 @@ class AgentManager:
         summary: dict[str, str | None] = {}
         for state, result in zip(targets, results, strict=True):
             if isinstance(result, BaseException):
+                # Dispatch is an explicit fan-out record: retain the attempted prompt on
+                # every target even though ordinary rejected sends are rolled back.
+                state.transcript.append(TranscriptEntry("user", prompt))
                 state.status = AgentStatus.ERROR
                 state.current_activity = "dispatch failed"
                 state.error_message = str(result)

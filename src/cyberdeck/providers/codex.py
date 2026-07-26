@@ -10,6 +10,10 @@ from .. import __version__
 from ..domain import HistoryPage, ThreadSummary, map_history_turns, parse_timestamp
 from .base import AgentEvent
 
+# JSON-RPC messages are newline-delimited and can contain large tool or agent payloads.
+# asyncio's 64 KiB default causes readline() to fail before JSON decoding.
+CODEX_STREAM_LIMIT = 16 * 1024 * 1024
+
 
 class CodexProtocolError(RuntimeError):
     pass
@@ -48,6 +52,7 @@ class CodexAppServerAdapter:
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            limit=CODEX_STREAM_LIMIT,
         )
         self._reader_task = asyncio.create_task(self._read_stdout())
         self._stderr_task = asyncio.create_task(self._read_stderr())
@@ -160,7 +165,6 @@ class CodexAppServerAdapter:
     async def send(self, prompt: str) -> None:
         if not self.thread_id:
             raise CodexProtocolError("Agent has not started")
-        await self._events.put(AgentEvent("status", "processing"))
         result = await self._request(
             "turn/start",
             {
@@ -169,6 +173,7 @@ class CodexAppServerAdapter:
             },
         )
         self.active_turn_id = result.get("turn", {}).get("id")
+        await self._events.put(AgentEvent("status", "processing"))
 
     async def interrupt_turn(self) -> None:
         if not self.thread_id or not self.active_turn_id:
