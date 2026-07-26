@@ -6,6 +6,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
+from .. import __version__
 from ..domain import HistoryPage, ThreadSummary, map_history_turns, parse_timestamp
 from .base import AgentEvent
 
@@ -57,7 +58,7 @@ class CodexAppServerAdapter:
                 "clientInfo": {
                     "name": "cyberdeck",
                     "title": "Cyberdeck",
-                    "version": "0.1.0",
+                    "version": __version__,
                 },
                 "capabilities": {"experimentalApi": True},
             },

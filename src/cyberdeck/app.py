@@ -109,6 +109,13 @@ class BootScreen(Screen[None]):
         ("  Archive bus....... Codex history bridge ............. FOUND", "#52e891", 0.07),
         ("  Network........... loopback only / stealth mode", "#cce7ed", 0.08),
         ("", "", 0.04),
+        ("[ GRID ] Mapping local cognition topology", "bold #e62acb", 0.10),
+        ("  Local grid........ private workspace lattice ....... MAPPED", "#52e891", 0.05),
+        ("  Provider gate..... Codex app-server ................. READY", "#52e891", 0.05),
+        ("  ICE response...... authorization table .............. ARMED", "#e9b949", 0.05),
+        ("  Constructs........ session memory index ............. READY", "#52e891", 0.07),
+        ("  Operator link..... 待機中 / awaiting neural handshake", "#00e8f2", 0.10),
+        ("", "", 0.04),
         ("[ SECURITY ] Establishing containment", "bold #e62acb", 0.10),
         ("  Secure enclave.... challenge accepted ............... PASS", "#52e891", 0.05),
         ("  Workspace roots... access matrix loaded ............. PASS", "#52e891", 0.05),
@@ -654,14 +661,14 @@ class AgentsWorkspace(Vertical):
                 yield Static(id="agent-model")
                 yield Static("│ STATE OFFLINE", id="agent-state")
                 yield Static("│ awaiting uplink", id="agent-activity")
-                yield Static("NET [····]", id="agent-network")
-                yield Static("MNEM [······] --", id="agent-mnem")
+                yield Static("GRID [····]", id="agent-network")
+                yield Static("MEM [······] --", id="agent-mnem")
                 yield Static(id="agent-cwd")
             yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
         yield Static(id="state-transition")
         yield VerticalScroll(id="conversation")
         with Vertical(id="operations-console"):
-            yield Static("OPS // NORMALIZED ACTIVITY", id="operations-title")
+            yield Static("GRID TRACE // LIVE OPERATIONS", id="operations-title")
             yield ListView(id="operations-list")
 
 
@@ -874,9 +881,9 @@ class CyberdeckApp(App[None]):
             yield Static(id="deck-clock")
         with Horizontal(id="workspace"):
             with Vertical(id="sidebar"):
-                yield Label("── AGENTS // 接続 ──", id="sidebar-title")
+                yield Label("── LOCAL GRID // 接続 ──", id="sidebar-title")
                 yield ListView(id="agents")
-                yield Label("── MODULES // 機能 ──", id="modules-title")
+                yield Label("── MODULE BAY // 機能 ──", id="modules-title")
                 yield ListView(
                     *(
                         ListItem(Label(self._module_label_id(module_id)))
@@ -977,13 +984,13 @@ class CyberdeckApp(App[None]):
     def _update_mnem(self, state: AgentState) -> None:
         meter = self.screen_stack[0].query_one("#agent-mnem", Static)
         if not state.context_window:
-            meter.update(Text("MNEM [······] --", style="#607087"))
+            meter.update(Text("MEM [······] --", style="#607087"))
             return
         percent = min(100, round(state.context_tokens / state.context_window * 100))
         filled = min(6, round(percent / 100 * 6))
         bar = "█" * filled + "░" * (6 - filled)
         color = "#52e891" if percent < 70 else "#e9b949" if percent < 90 else "#ff3b4f"
-        meter.update(Text(f"MNEM [{bar}] {percent:02d}%", style=f"bold {color}"))
+        meter.update(Text(f"MEM [{bar}] {percent:02d}%", style=f"bold {color}"))
 
     def _update_network(self) -> None:
         state = self._active_agent()
@@ -995,17 +1002,17 @@ class CyberdeckApp(App[None]):
         self._update_signal_trace(state)
         self._refresh_agent_labels()
         if not state:
-            indicator.update(Text("NET [····]", style="#607087"))
+            indicator.update(Text("GRID [····]", style="#607087"))
             return
         patterns = ("▁▃▅▇", "▃▅▇▅", "▅▇▅▃", "▇▅▃▁")
         if state.status is AgentStatus.ERROR:
-            label, color = "NET [LOST]", "#ff3b4f"
+            label, color = "GRID [LOST]", "#ff3b4f"
         elif state.status is AgentStatus.FIREWALL_HOLD:
-            label, color = "NET [HOLD]", "#ff3b4f"
+            label, color = "GRID [ICE]", "#ff3b4f"
         elif state.status in {AgentStatus.PROCESSING, AgentStatus.EXECUTING, AgentStatus.EDITING, AgentStatus.RESTORING}:
-            label, color = f"NET [{patterns[self._network_phase]}]", "#e9b949"
+            label, color = f"GRID [{patterns[self._network_phase]}]", "#e9b949"
         else:
-            label, color = f"NET [{patterns[self._network_phase]}]", "#52e891"
+            label, color = f"GRID [{patterns[self._network_phase]}]", "#52e891"
         indicator.update(Text(label, style=f"bold {color}"))
 
     def _update_signal_trace(self, state: AgentState | None) -> None:
@@ -1644,7 +1651,29 @@ class CyberdeckApp(App[None]):
         if not state: return
         for op in state.operations:
             glyph = {"succeeded": "✓", "failed": "!", "approval": "?", "running": "◐", "pending": "○"}[op.state.value]
-            view.append(ListItem(Label(f"{op.created_at:%H:%M:%S}  {op.kind:<18} {glyph} {op.summary}")))
+            trace = self._trace_class(op)
+            view.append(
+                ListItem(
+                    Label(
+                        f"{op.created_at:%H:%M:%S}  {trace:<7} {glyph} "
+                        f"{op.kind:<16} {op.summary}"
+                    )
+                )
+            )
+
+    @staticmethod
+    def _trace_class(operation: OperationEntry) -> str:
+        if operation.state.value == "approval":
+            return "ICE"
+        if operation.state.value == "failed":
+            return "FAULT"
+        return {
+            "commandExecution": "TRACE",
+            "fileChange": "PATCH",
+            "mcpToolCall": "PROBE",
+            "dynamicToolCall": "PROBE",
+            "webSearch": "SCAN",
+        }.get(operation.kind, "SIGNAL")
 
     def _write_local(self, text: str) -> None:
         state = self._active_agent(); (state.transcript if state else self._system_transcript).append(TranscriptEntry("system", text))
@@ -2133,15 +2162,20 @@ class CyberdeckApp(App[None]):
         if state is not self._active_agent(): state.unread_count += 1
         if event.kind == "status":
             if event.text == "ready":
-                self._show_transition(state, "CARRIER STABLE // 通信安定", "#52e891")
+                message = (
+                    "CONSTRUCT RESTORED // 記憶復元"
+                    if state.restored
+                    else "GRID MAPPED // CARRIER STABLE"
+                )
+                self._show_transition(state, message, "#52e891")
             elif event.text in {"processing", "working"}:
-                self._show_transition(state, "SIGNAL ENGAGED // 稼働", "#00e8f2")
+                self._show_transition(state, "CONSTRUCT ACTIVE // SIGNAL ENGAGED", "#00e8f2")
         elif event.kind == "approval":
             approval = state.pending_approvals[-1] if state.pending_approvals else None
             level, color = ice_level(state, approval) if approval else ("ICE", "#ff3b4f")
             self._show_transition(state, f"{level} INTERLOCK // 認証待機", color)
         elif event.kind in {"error", "transport_closed"}:
-            self._show_transition(state, "SIGNAL LOST // 通信断", "#ff3b4f")
+            self._show_transition(state, "GRID FRACTURE // SIGNAL LOST", "#ff3b4f")
         if event.kind == "approval" and state is self._active_agent():
             self._refresh_all()
             self.call_after_refresh(self._focus_latest_approval)
@@ -2226,6 +2260,8 @@ class CyberdeckApp(App[None]):
         if state.unread_count:
             label.append(f"  +{state.unread_count}", style="bold #e9b949")
         label.append(f"  {state.status.value}", style="#7a879a")
+        provider = (state.model_provider or state.config.provider).upper()
+        label.append(f"\n  ├─ {provider} / LOCAL", style="#607087")
         label.append(f"\n  └─ {state.config.working_directory.name}", style="#46566c")
         return label
 

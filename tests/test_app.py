@@ -23,6 +23,8 @@ from cyberdeck.domain import (
     AgentConfig,
     AgentState,
     AgentStatus,
+    OperationEntry,
+    OperationState,
     PendingApproval,
     TranscriptEntry,
 )
@@ -41,7 +43,37 @@ async def test_app_mounts() -> None:
         assert pilot.app.query_one("#state-transition").display is False
         assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
         assert "接続" in str(pilot.app.query_one("#sidebar-title").content)
+        assert "LOCAL GRID" in str(pilot.app.query_one("#sidebar-title").content)
+        assert "MODULE BAY" in str(pilot.app.query_one("#modules-title").content)
         assert "電脳端末" in str(pilot.app.query_one("#deck-brand").content)
+
+
+def test_agent_label_exposes_real_local_provider_topology() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    state = AgentState(
+        AgentConfig("ghost", Path("/tmp")),
+        status=AgentStatus.READY,
+        model_provider="codex",
+    )
+    label = str(app._agent_label(state))
+    assert "SYN::GHOST" in label
+    assert "CODEX / LOCAL" in label
+    assert "tmp" in label
+
+
+@pytest.mark.parametrize(
+    ("operation", "expected"),
+    [
+        (OperationEntry("commandExecution", "ls"), "TRACE"),
+        (OperationEntry("fileChange", "app.py"), "PATCH"),
+        (OperationEntry("mcpToolCall", "issues"), "PROBE"),
+        (OperationEntry("webSearch", "ACP"), "SCAN"),
+        (OperationEntry("tool", "blocked", OperationState.APPROVAL), "ICE"),
+        (OperationEntry("tool", "broken", OperationState.FAILED), "FAULT"),
+    ],
+)
+def test_grid_trace_classes_are_semantic(operation: OperationEntry, expected: str) -> None:
+    assert CyberdeckApp._trace_class(operation) == expected
 
 
 @pytest.mark.asyncio
@@ -265,4 +297,4 @@ async def test_agent_events_show_real_state_transition_banner() -> None:
         pilot.app._agent_event(state, AgentEvent("status", "processing"))
         banner = pilot.app.query_one("#state-transition")
         assert banner.display is True
-        assert "SIGNAL ENGAGED // 稼働" in str(banner.content)
+        assert "CONSTRUCT ACTIVE // SIGNAL ENGAGED" in str(banner.content)

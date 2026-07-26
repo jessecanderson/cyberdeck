@@ -5,6 +5,11 @@
 A neon, keyboard-first TUI for running multiple local coding agents. The first
 provider uses the experimental Codex app-server protocol over stdio.
 
+The interface uses a restrained, original ODS cyberdeck vocabulary: open agents
+occupy the Local Grid, normalized activity appears in the Grid Trace, permission
+boundaries surface as ICE, and workspaces live in the Module Bay. See the
+[interface language guide](docs/design-language.md).
+
 ## Visual tour
 
 ### Agent Command Center
