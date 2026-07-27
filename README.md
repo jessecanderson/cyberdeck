@@ -56,11 +56,11 @@ kiro-cli --version
 ```
 
 The recommended macOS installation uses the public Cyberdeck Homebrew tap and
-includes a standalone Python runtime. It does not use Homebrew Python or the
-macOS system Python. Homebrew adds the tap automatically:
+installs a standalone runtime through a Homebrew formula. It does not use
+Homebrew Python or the macOS system Python. Homebrew adds the tap automatically:
 
 ```bash
-brew install --cask jessecanderson/tap/cyberdeck
+brew install jessecanderson/tap/cyberdeck
 cyberdeck --version
 cyberdeck
 ```
@@ -69,18 +69,22 @@ Upgrade, reinstall, or remove it with:
 
 ```bash
 brew update
-brew upgrade --cask cyberdeck
-brew reinstall --cask cyberdeck
-brew uninstall --cask cyberdeck
+brew upgrade cyberdeck
+brew reinstall cyberdeck
+brew uninstall cyberdeck
 ```
 
-If Cyberdeck was previously installed using the Python-based formula, migrate
-once with:
+If Cyberdeck was previously installed using the older Python-based formula,
+refresh the tap and reinstall the standalone formula:
 
 ```bash
-brew uninstall --formula cyberdeck
-brew install --cask jessecanderson/tap/cyberdeck
+brew update
+brew reinstall jessecanderson/tap/cyberdeck
 ```
+
+The cask variant is also available for Apple Silicon, but the formula is the
+preferred command-line installation because it avoids macOS application
+quarantine handling.
 
 Alternatively, [pipx](https://pipx.pypa.io/stable/) can install the latest
 source directly from GitHub while keeping the application isolated:
