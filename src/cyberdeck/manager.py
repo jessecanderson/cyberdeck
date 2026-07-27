@@ -222,6 +222,29 @@ class AgentManager:
         state.status = AgentStatus.READY
         state.current_activity = "turn interrupted"
 
+    async def compact_context(self, state: AgentState) -> None:
+        if not state.capabilities.context_compaction:
+            raise ValueError(
+                f"{state.config.provider} does not support context compaction"
+            )
+        if state.status is not AgentStatus.READY:
+            raise ValueError(
+                f"{state.config.name} is {state.status.value}; wait for READY"
+            )
+        state.status = AgentStatus.PROCESSING
+        state.current_activity = "compacting context"
+        try:
+            await self._adapters[str(state.config.id)].compact_context()
+        except Exception as exc:
+            state.status = AgentStatus.ERROR
+            state.current_activity = "context compaction failed"
+            state.error_message = str(exc)
+            raise
+        state.status = AgentStatus.READY
+        state.current_activity = "context compacted"
+        state.context_tokens = 0
+        state.context_percentage = None
+
     async def _remove(self, state: AgentState) -> None:
         key = str(state.config.id)
         task = self._tasks.pop(key, None)

@@ -7,10 +7,10 @@ migration is not part of the 0.3.0 contract.
 
 ## Built-in runtimes
 
-| Runtime | Transport | New | Resume | Rename | Archive | Interrupt | ICE |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `codex` | App Server stdio | yes | yes | yes | yes | yes | yes |
-| `kiro` | ACP v1 stdio | yes | negotiated | no | no | yes | yes |
+| Runtime | Transport | New | Resume | Rename | Archive | Interrupt | ICE | Compact |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `codex` | App Server stdio | yes | yes | yes | yes | yes | yes | yes |
+| `kiro` | ACP v1 stdio | yes | negotiated | no | no | yes | yes | extension |
 
 Kiro resume is available only when its initialize response advertises
 `agentCapabilities.loadSession`. ACP v1 session loading restores provider
@@ -65,6 +65,12 @@ Control keeps its stable action layout but labels unsupported actions
 `UNAVAILABLE`. Equivalent slash commands are guarded by the manager before a
 transport call. Disconnect remains universally available because it only stops
 the Cyberdeck-owned process and removes the local sidebar entry.
+
+Context compaction is capability-gated as well. Codex uses
+`thread/compact/start`; Kiro uses its `_kiro.dev/commands/execute` extension
+with the `/compact` command. Generic ACP v1 runtimes are marked unavailable
+because ACP does not standardize context compaction. `/clear` remains a
+Cyberdeck display operation and never implies provider-side context deletion.
 
 Dispatch can mix ready Codex, Kiro, and configured ACP agents. Each send is an
 independent turn; partial failures remain isolated and are never rolled back on

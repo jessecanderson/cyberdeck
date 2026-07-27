@@ -122,7 +122,8 @@ thread itself; ACP provider capabilities determine whether other providers can
 persist names.
 `Ctrl+R` opens the manual Archive Uplink, where non-archived interactive Codex
 threads can be searched, multi-selected, and restored. `Ctrl+J` and `Ctrl+K`
-cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix. Unsent
+cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix, and
+`/switch CALLSIGN` jumps directly to a named uplink. Unsent
 drafts follow their agent, and Up/Down recalls process-local prompt history.
 
 `Ctrl+G` opens Operative Control for rename, interrupt, retry, disconnect, and
@@ -133,8 +134,18 @@ agents.
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
 the active module. Start with `/help`; current commands include `/new`,
 `/restore`, `/agents`, `/runtimes`, `/agent`, `/rename`, `/interrupt`, `/retry`,
-`/disconnect`, `/archive`, `/dispatch`, `/module`, `/theme`, `/journal`,
-`/older`, `/clear`, `/path`, and `/quit`.
+`/disconnect`, `/archive`, `/dispatch`, `/switch`, `/module`, `/next-module`,
+`/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
+`/quit`. The help window is scrollable and includes commands contributed by
+loaded modules. While autocomplete is visible, use Up/Down to highlight an
+option and Tab to accept it. The `Ctrl+P` Uplink Matrix likewise supports
+Up/Down and Enter without moving focus out of its search field.
+
+Use `/context` to inspect the provider's latest reported context usage and
+whether compaction is available. `/compact` invokes native Codex compaction or
+Kiro's ACP command extension; it is never sent as an ordinary chat prompt.
+`/clear` only clears the local Cyberdeck transcript display and deliberately
+does not alter provider context.
 
 The canonical `/new` form puts the runtime before the optional path:
 
@@ -170,7 +181,8 @@ preflight behavior, and current provider limitations.
 Cyberdeck is organized as a permanent deck shell with switchable workspaces.
 The agent command center remains the default module, and live agent states stay
 visible in the left rail from every workspace. Select an agent to return to its
-command center, press `Ctrl+M` to cycle modules, or use `/module NAME`.
+command center, press `F6` to cycle modules, or use `/module NAME` and
+`/next-module`.
 
 The built-in Journal stores user-owned Markdown rather than a database. It uses
 one `YYYY-MM-DD.md` file per day, provides date navigation and content search,

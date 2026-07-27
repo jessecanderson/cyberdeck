@@ -1,5 +1,6 @@
 import asyncio
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -32,6 +33,7 @@ from cyberdeck.domain import (
     OperationEntry,
     OperationState,
     PendingApproval,
+    ThreadSummary,
     TranscriptEntry,
 )
 from cyberdeck.manager import AgentManager
@@ -120,9 +122,24 @@ async def test_local_help_command_does_not_require_agent() -> None:
         await pilot.pause()
         assert pilot.app.screen.__class__.__name__ == "HelpScreen"
         assert "/new" in str(pilot.app.screen.query_one("#help-content").content)
+        help_scroll = pilot.app.screen.query_one("#help-scroll")
+        assert help_scroll.has_focus
+        await pilot.press("down", "down", "down")
+        await pilot.pause()
+        assert help_scroll.scroll_y > 0
         await pilot.press("escape")
         await pilot.pause()
         assert pilot.app.screen.__class__.__name__ != "HelpScreen"
+
+
+@pytest.mark.asyncio
+async def test_help_screen_is_generated_from_every_registered_command() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        await pilot.app._run_local_command("/help")
+        await pilot.pause()
+        content = str(pilot.app.screen.query_one("#help-content").content)
+        for command in pilot.app._all_local_commands():
+            assert command in content
 
 
 @pytest.mark.asyncio
@@ -494,6 +511,12 @@ async def test_grid_trace_rows_include_class_and_phase() -> None:
         labels = [str(label.content) for label in pilot.app.query("#operations-list Label")]
         assert any("TRACE" in label and "ACTIVE" in label for label in labels)
         assert any("PATCH" in label and "CLEAR" in label for label in labels)
+        await pilot.press("ctrl+o")
+        operations = pilot.app.query_one("#operations-list")
+        assert operations.has_focus
+        assert operations.index == 0
+        await pilot.press("down")
+        assert operations.index == 1
 
 
 @pytest.mark.asyncio
@@ -529,6 +552,89 @@ async def test_new_shortcuts_open_agent_overlays() -> None:
         await pilot.press("escape")
         await pilot.press("ctrl+b")
         assert isinstance(pilot.app.screen, DispatchScreen)
+
+
+@pytest.mark.asyncio
+async def test_agent_switcher_arrows_select_results_without_mouse() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        for name in ("ghost", "molly", "case"):
+            state = pilot.app.manager.register(name, Path("/tmp"), status=AgentStatus.READY)
+            await pilot.app._add_agent_item(state, select=name == "ghost")
+        await pilot.pause(0.2)
+
+        await pilot.press("ctrl+p")
+        assert isinstance(pilot.app.screen, AgentSwitcher)
+        search = pilot.app.screen.query_one("#switch-search")
+        results = pilot.app.screen.query_one("#switch-list")
+        assert search.has_focus
+        assert results.index == 0
+
+        await pilot.press("down", "down", "up")
+        assert search.has_focus
+        assert results.index == 1
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert pilot.app._active_agent().config.name == "molly"
+
+
+@pytest.mark.asyncio
+async def test_control_and_dispatch_lists_navigate_from_initial_input() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        for name in ("ghost", "molly", "case"):
+            state = pilot.app.manager.register(name, Path("/tmp"), status=AgentStatus.READY)
+            await pilot.app._add_agent_item(state, select=name == "ghost")
+        await pilot.pause(0.2)
+
+        await pilot.press("ctrl+g")
+        assert isinstance(pilot.app.screen, OperativeControl)
+        control = pilot.app.screen.query_one("#control-list")
+        await pilot.press("down", "down")
+        assert control.index == 2
+        await pilot.press("escape")
+
+        await pilot.press("ctrl+b")
+        assert isinstance(pilot.app.screen, DispatchScreen)
+        search = pilot.app.screen.query_one("#dispatch-search")
+        targets = pilot.app.screen.query_one("#dispatch-list")
+        await pilot.press("down", "space")
+        assert search.has_focus
+        assert search.value == ""
+        assert targets.index == 1
+        assert pilot.app.manager.agents[1].config.id in pilot.app.screen.selected
+        await pilot.press("space")
+        assert pilot.app.manager.agents[1].config.id not in pilot.app.screen.selected
+        await pilot.press("enter")
+        assert pilot.app.manager.agents[1].config.id in pilot.app.screen.selected
+
+
+@pytest.mark.asyncio
+async def test_restore_arrows_navigate_results_while_search_keeps_focus() -> None:
+    threads = [
+        ThreadSummary(
+            id=f"thread-{index}",
+            name=name,
+            source="cli",
+            cwd=Path("/tmp"),
+            preview="restorable thread",
+            updated_at=datetime.now(UTC),
+        )
+        for index, name in enumerate(("ghost", "molly", "case"))
+    ]
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.push_screen(RestoreScreen(threads))
+        await pilot.pause()
+        search = pilot.app.screen.query_one("#restore-search")
+        results = pilot.app.screen.query_one("#restore-list")
+
+        await pilot.press("down", "down", "up")
+
+        assert search.has_focus
+        assert results.index == 1
+        await pilot.press("space")
+        assert search.value == ""
+        assert threads[1].id in pilot.app.screen.selected
+        assert "◆" in str(results.children[1].query_one("Label").content)
 
 
 @pytest.mark.asyncio
@@ -569,6 +675,35 @@ def test_lifecycle_and_dispatch_commands_are_autocompletable() -> None:
     assert expected <= set(app.LOCAL_COMMANDS)
 
 
+@pytest.mark.asyncio
+async def test_arrow_keys_select_autocomplete_and_tab_accepts_highlight() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        prompt.value = "/mo"
+        await pilot.pause()
+
+        assert [row[0] for row in pilot.app._prompt_completions[:3]] == [
+            "/modules",
+            "/module",
+        ]
+        assert pilot.app._completion_index == 0
+        await pilot.press("down")
+        assert pilot.app._completion_index == 1
+
+        await pilot.press("tab")
+        assert prompt.value == "/module"
+
+
+@pytest.mark.asyncio
+async def test_restore_space_binding_does_not_capture_normal_prompt_spaces() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        await pilot.press("a", "space", "b")
+        assert prompt.value == "a b"
+
+
 def test_prompt_completion_ignores_unresolvable_tilde_token() -> None:
     app = CyberdeckApp(skip_boot=True)
     assert app._complete("Create me a test.txt doc in ~d") == []
@@ -581,6 +716,61 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
     assert app._complete("/send gh") == [("Ghost", "ready agent")]
     assert app._complete("/pipe ci") == [("Cipher", "ready agent")]
     assert ("all", "all connected agents") in app._complete("/kill a")
+    assert app._complete("/switch gh") == [("Ghost", "ready agent")]
+
+
+@pytest.mark.asyncio
+async def test_navigation_wraps_many_agents_and_switches_by_callsign() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        for index in range(40):
+            state = pilot.app.manager.register(
+                f"agent-{index:02d}", Path("/tmp"), status=AgentStatus.READY
+            )
+            await pilot.app._add_agent_item(state, select=index == 0)
+
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        await pilot.press("ctrl+k")
+        assert pilot.app._active_agent().config.name == "agent-39"
+        await pilot.press("ctrl+j")
+        assert pilot.app._active_agent().config.name == "agent-00"
+
+        await pilot.app._run_local_command("/switch AGENT-27")
+        assert pilot.app._active_agent().config.name == "agent-27"
+        assert pilot.app.query_one("#agents").index == 27
+
+
+@pytest.mark.asyncio
+async def test_f6_and_slash_command_cycle_modules() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        await pilot.pause(0.2)
+        assert pilot.app.active_module_id == "agents"
+        await pilot.press("f6")
+        await pilot.pause(0.2)
+        assert pilot.app.active_module_id == "journal"
+
+        await pilot.app._run_local_command("/next-module")
+        await pilot.pause(0.2)
+        assert pilot.app.active_module_id == "agents"
+
+
+@pytest.mark.asyncio
+async def test_context_commands_report_usage_and_clear_only_local_display() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.capabilities = AgentCapabilities(context_compaction=True)
+        state.context_tokens = 32_000
+        state.context_window = 128_000
+        state.transcript.append(TranscriptEntry("assistant", "provider remembers this"))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/context")
+        assert "32,000/128,000 tokens (25.0%)" in state.transcript[-1].text
+        assert "COMPACT READY" in state.transcript[-1].text
+
+        await pilot.app._run_local_command("/clear")
+        assert state.transcript == []
+        assert state.context_tokens == 32_000
 
 
 @pytest.mark.asyncio

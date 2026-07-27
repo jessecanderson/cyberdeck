@@ -280,3 +280,35 @@ assert cancel == {"jsonrpc":"2.0","method":"session/cancel","params":{
     await asyncio.wait_for(agent.process.wait(), timeout=1)
     assert agent.capabilities.load_session is True
     await agent.stop()
+
+
+@pytest.mark.asyncio
+async def test_kiro_context_compaction_uses_tagged_command_extension(
+    tmp_path: Path,
+) -> None:
+    script = r'''
+import json, sys
+
+def receive(): return json.loads(sys.stdin.readline())
+def send(message): print(json.dumps(message, separators=(",", ":")), flush=True)
+
+initialize = receive()
+send({"jsonrpc":"2.0","id":initialize["id"],"result":{
+    "protocolVersion":1,"agentInfo":{"name":"Kiro CLI Agent","version":"2.14.2"}
+}})
+new_session = receive()
+send({"jsonrpc":"2.0","id":new_session["id"],"result":{"sessionId":"kiro-compact"}})
+compact = receive()
+assert compact["method"] == "_kiro.dev/commands/execute"
+assert compact["params"] == {
+    "sessionId":"kiro-compact",
+    "command":{"command":"compact","args":{}},
+}
+send({"jsonrpc":"2.0","id":compact["id"],"result":{"success":True}})
+'''
+    agent = adapter(script)
+    await agent.start(tmp_path)
+
+    assert agent.capabilities.context_compaction is True
+    await agent.compact_context()
+    await agent.stop()
