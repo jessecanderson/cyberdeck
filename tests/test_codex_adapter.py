@@ -111,6 +111,13 @@ async def test_compact_context_uses_thread_compact_start() -> None:
         "params": {"threadId": "thread-7"},
     }
     adapter._pending[1].set_result({})
+    await asyncio.sleep(0)
+    await adapter._handle_notification(
+        {
+            "method": "item/completed",
+            "params": {"item": {"type": "contextCompaction", "id": "compact-1"}},
+        }
+    )
     await task
 
 
