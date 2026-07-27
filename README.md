@@ -86,6 +86,31 @@ The cask variant is also available for Apple Silicon, but the formula is the
 preferred command-line installation because it avoids macOS application
 quarantine handling.
 
+### Managed macOS or existing Python runtime
+
+If your Mac blocks downloaded runtimes with Gatekeeper, use a trusted Python
+already installed on the machine (for example, a pyenv Python) instead of the
+standalone Homebrew runtime. This keeps Cyberdeck in its own virtual
+environment and does not modify the existing Python installation:
+
+```bash
+PYTHON_BIN="$(pyenv which python3.13)"
+VENV="$HOME/.local/share/cyberdeck/venv"
+
+"$PYTHON_BIN" -m venv --clear "$VENV"
+"$VENV/bin/python" -m pip install --upgrade pip
+"$VENV/bin/python" -m pip install \
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.3/cyberdeck_tui-0.3.3-py3-none-any.whl"
+
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"
+rehash
+cyberdeck --version
+```
+
+The Python interpreter must be 3.11 or newer. If `~/.local/bin` is not already
+on your `PATH`, add it through your shell profile before launching Cyberdeck.
+
 Alternatively, [pipx](https://pipx.pypa.io/stable/) can install the latest
 source directly from GitHub while keeping the application isolated:
 
