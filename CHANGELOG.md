@@ -3,6 +3,14 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.3] - 2026-07-27
+
+### Fixed
+
+- Resolve Homebrew's cask symlink before launching the standalone runtime, so
+  `cyberdeck` works after installation rather than only from an extracted
+  release directory.
+
 ## [0.3.2] - 2026-07-27
 
 ### Added

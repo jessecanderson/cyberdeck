@@ -42,13 +42,24 @@ cp "$PROJECT_ROOT/README.md" "$BUNDLE_ROOT/README.md"
 cat > "$BUNDLE_ROOT/cyberdeck-bin/cyberdeck" <<'EOF'
 #!/bin/sh
 set -eu
-BUNDLE_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIRECTORY=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+  LINK_TARGET=$(readlink "$SOURCE")
+  case "$LINK_TARGET" in
+    /*) SOURCE="$LINK_TARGET" ;;
+    *) SOURCE="$SOURCE_DIRECTORY/$LINK_TARGET" ;;
+  esac
+done
+BUNDLE_ROOT=$(CDPATH= cd -- "$(dirname -- "$SOURCE")/.." && pwd)
 exec "$BUNDLE_ROOT/bin/python3" -m cyberdeck.app "$@"
 EOF
 chmod +x "$BUNDLE_ROOT/cyberdeck-bin/cyberdeck"
 
 "$BUNDLE_ROOT/bin/python3" -c 'import pyexpat; print(pyexpat.EXPAT_VERSION)'
 test "$("$BUNDLE_ROOT/cyberdeck-bin/cyberdeck" --version)" = "cyberdeck $VERSION"
+ln -s "$BUNDLE_ROOT/cyberdeck-bin/cyberdeck" "$WORK_DIRECTORY/cyberdeck-link"
+test "$("$WORK_DIRECTORY/cyberdeck-link" --version)" = "cyberdeck $VERSION"
 file "$BUNDLE_ROOT/bin/python3" | grep -q 'arm64'
 "$BUNDLE_ROOT/bin/python3" -m venv "$WORK_DIRECTORY/module-venv"
 "$WORK_DIRECTORY/module-venv/bin/python" -c 'import pyexpat, venv'
