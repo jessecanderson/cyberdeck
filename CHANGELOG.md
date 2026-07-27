@@ -3,6 +3,25 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.2] - 2026-07-27
+
+### Added
+
+- Publish a tested standalone Apple Silicon macOS bundle containing a
+  relocatable CPython runtime and Cyberdeck's application dependencies.
+- Dispatch the standalone artifact URL and verified checksum to the Homebrew
+  tap so tagged releases automatically update the cask through a protected PR.
+
+### Changed
+
+- Recommend `brew install --cask` on macOS so Cyberdeck no longer depends on a
+  Homebrew Python bottle or the host's system Expat library.
+
+### Fixed
+
+- Avoid `pyexpat` loader failures on managed macOS versions whose system Expat
+  symbols are incompatible with Homebrew's precompiled Python bottles.
+
 ## [0.3.1] - 2026-07-26
 
 ### Added

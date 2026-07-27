@@ -33,8 +33,7 @@ autosave, search, themes, and mixed English/Japanese writing.
 
 ## Requirements
 
-- Homebrew on macOS for the recommended installation (Python is installed as
-  a formula dependency)
+- Homebrew on Apple Silicon macOS for the recommended standalone installation
 - At least one supported provider CLI installed and authenticated:
   - Codex: `codex login`
   - Kiro: `kiro-cli login`
@@ -56,11 +55,12 @@ kiro-cli login
 kiro-cli --version
 ```
 
-The recommended installation uses the public Cyberdeck Homebrew tap. Homebrew
-adds the tap automatically when you run the fully qualified install command:
+The recommended macOS installation uses the public Cyberdeck Homebrew tap and
+includes a standalone Python runtime. It does not use Homebrew Python or the
+macOS system Python. Homebrew adds the tap automatically:
 
 ```bash
-brew install jessecanderson/tap/cyberdeck
+brew install --cask jessecanderson/tap/cyberdeck
 cyberdeck --version
 cyberdeck
 ```
@@ -69,9 +69,17 @@ Upgrade, reinstall, or remove it with:
 
 ```bash
 brew update
-brew upgrade cyberdeck
-brew reinstall cyberdeck
-brew uninstall cyberdeck
+brew upgrade --cask cyberdeck
+brew reinstall --cask cyberdeck
+brew uninstall --cask cyberdeck
+```
+
+If Cyberdeck was previously installed using the Python-based formula, migrate
+once with:
+
+```bash
+brew uninstall --formula cyberdeck
+brew install --cask jessecanderson/tap/cyberdeck
 ```
 
 Alternatively, [pipx](https://pipx.pypa.io/stable/) can install the latest
@@ -82,7 +90,8 @@ pipx install git+https://github.com/jessecanderson/cyberdeck.git
 cyberdeck
 ```
 
-Versioned wheel and source-distribution files are also attached to each
+Versioned wheel, source-distribution, and standalone Apple Silicon macOS files
+are also attached to each
 [GitHub Release](https://github.com/jessecanderson/cyberdeck/releases). PyPI is
 not currently a supported installation channel.
 
