@@ -4,13 +4,22 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to validate and publish
+        required: true
+        type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   release:
@@ -18,13 +27,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
           cache: pip
       - name: Verify tag matches package version
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           PACKAGE_VERSION=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           test "$RELEASE_TAG" = "v$PACKAGE_VERSION"
@@ -38,25 +47,30 @@ jobs:
         run: |
           python -m venv /tmp/cyberdeck-release-test
           /tmp/cyberdeck-release-test/bin/python -m pip install dist/*.whl
-          test "$(/tmp/cyberdeck-release-test/bin/cyberdeck --version)" = "cyberdeck ${GITHUB_REF_NAME#v}"
+          test "$(/tmp/cyberdeck-release-test/bin/cyberdeck --version)" = "cyberdeck ${RELEASE_TAG#v}"
       - name: Generate checksums
-        run: sha256sum dist/* > SHA256SUMS
+        run: (cd dist && sha256sum *) > ../SHA256SUMS
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* SHA256SUMS --verify-tag --generate-notes --title "Cyberdeck $GITHUB_REF_NAME"
+        run: |
+          if gh release view "$RELEASE_TAG" > /dev/null 2>&1; then
+            echo "GitHub release $RELEASE_TAG already exists; reusing it."
+          else
+            gh release create "$RELEASE_TAG" dist/* SHA256SUMS --verify-tag --generate-notes --title "Cyberdeck $RELEASE_TAG"
+          fi
       - name: Dispatch Homebrew tap update
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${RELEASE_TAG#v}"
           SOURCE_ARCHIVE="cyberdeck_tui-${VERSION}.tar.gz"
           SOURCE_SHA256=$(awk -v archive="$SOURCE_ARCHIVE" '$2 == archive { print $1 }' SHA256SUMS)
           test -n "$SOURCE_SHA256"
-          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${SOURCE_ARCHIVE}"
+          SOURCE_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/${SOURCE_ARCHIVE}"
           jq -n \
             --arg version "$VERSION" \
-            --arg tag "$GITHUB_REF_NAME" \
+            --arg tag "$RELEASE_TAG" \
             --arg source_url "$SOURCE_URL" \
             --arg source_sha256 "$SOURCE_SHA256" \
             '{
