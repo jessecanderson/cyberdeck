@@ -54,6 +54,7 @@ class CodexAppServerAdapter:
             context_compaction=True,
         )
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
 
     async def _initialize(self, working_directory: Path) -> Path:
         cwd = working_directory.expanduser().resolve()
@@ -61,6 +62,7 @@ class CodexAppServerAdapter:
             raise ValueError(f"Working directory does not exist: {cwd}")
         self.cwd = cwd
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
         self.process = await asyncio.create_subprocess_exec(
             self.executable,
             "app-server",
@@ -274,14 +276,24 @@ class CodexAppServerAdapter:
         try:
             while line := await self.process.stdout.readline():
                 message = json.loads(line)
+                if not isinstance(message, dict):
+                    raise CodexProtocolError("Codex message must be a JSON object")
                 if "id" in message and ("result" in message or "error" in message):
                     request_id = message["id"]
                     future = self._pending.get(request_id)
-                    if future and not future.done():
-                        if "error" in message:
-                            future.set_exception(CodexProtocolError(str(message["error"])))
-                        else:
-                            future.set_result(message.get("result", {}))
+                    if not future or future.done():
+                        raise CodexProtocolError(
+                            f"response for unknown request id: {request_id}"
+                        )
+                    if "error" in message:
+                        future.set_exception(CodexProtocolError(str(message["error"])))
+                    else:
+                        result = message.get("result")
+                        if not isinstance(result, dict):
+                            raise CodexProtocolError(
+                                f"invalid result for request id: {request_id}"
+                            )
+                        future.set_result(result)
                     continue
                 if "id" in message and "method" in message:
                     method = message.get("method", "")
@@ -300,7 +312,9 @@ class CodexAppServerAdapter:
                     continue
                 await self._handle_notification(message)
             if not self._intentional_shutdown:
-                await self._transport_closed("Codex app-server closed stdout")
+                returncode = getattr(self.process, "returncode", None)
+                suffix = f" (exit {returncode})" if returncode is not None else ""
+                await self._transport_closed(f"Codex app-server closed stdout{suffix}")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - convert transport failures to agent events
@@ -308,6 +322,9 @@ class CodexAppServerAdapter:
                 await self._transport_closed(f"Codex transport failure: {exc}")
 
     async def _transport_closed(self, reason: str) -> None:
+        if self._transport_failure_reported:
+            return
+        self._transport_failure_reported = True
         error = CodexProtocolError(reason)
         for future in self._pending.values():
             if not future.done():

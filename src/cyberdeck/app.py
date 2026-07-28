@@ -751,6 +751,73 @@ class TerminalMessage(Static):
         return Group(prefix, Padding(Markdown(markdown), (0, 0, 0, len(time) + 2)))
 
 
+class TranscriptSelection(ModalScreen[list[TranscriptEntry] | None]):
+    """Keyboard-only whole-message selection; transcript entries are never mutated."""
+
+    BINDINGS: ClassVar = [
+        Binding("up", "previous", "Previous", priority=True),
+        Binding("down", "next", "Next", priority=True),
+        Binding("space", "toggle", "Select", priority=True),
+        Binding("enter", "confirm", "Copy", priority=True),
+        Binding("escape", "cancel", "Cancel", priority=True),
+    ]
+
+    def __init__(self, entries: list[TranscriptEntry]) -> None:
+        super().__init__()
+        self.entries = entries
+        self.selected: set[int] = set()
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="transcript-select-dialog"):
+            yield Label("TRANSCRIPT SELECT // WHOLE MESSAGES", id="transcript-select-title")
+            yield ListView(id="transcript-select-list")
+            yield Static(
+                "↑↓ MOVE   SPACE SELECT   ENTER COPY   ESC CANCEL",
+                classes="modal-help",
+            )
+
+    def on_mount(self) -> None:
+        self._rebuild(0)
+        self.query_one("#transcript-select-list", ListView).focus()
+
+    def _rebuild(self, index: int | None = None) -> None:
+        view = self.query_one("#transcript-select-list", ListView)
+        view.clear()
+        for position, entry in enumerate(self.entries):
+            mark = "◆" if position in self.selected else "◇"
+            preview = entry.text.replace("\n", " ↵ ")
+            view.append(
+                ListItem(Label(f"{mark} {entry.role.upper():<9} {preview}"))
+            )
+        if self.entries:
+            view.index = min(index or 0, len(self.entries) - 1)
+
+    def action_previous(self) -> None:
+        CyberdeckApp._move_focused_list(
+            self.query_one("#transcript-select-list", ListView), -1
+        )
+
+    def action_next(self) -> None:
+        CyberdeckApp._move_focused_list(
+            self.query_one("#transcript-select-list", ListView), 1
+        )
+
+    def action_toggle(self) -> None:
+        view = self.query_one("#transcript-select-list", ListView)
+        if view.index is None:
+            return
+        index = view.index
+        self.selected.symmetric_difference_update({index})
+        self._rebuild(index)
+
+    def action_confirm(self) -> None:
+        if self.selected:
+            self.dismiss([self.entries[index] for index in sorted(self.selected)])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class EmptyGrid(Static):
     def render(self) -> Group:
         return Group(
@@ -920,6 +987,7 @@ class CyberdeckApp(App[None]):
         Binding("ctrl+g", "agent_control", "Control", priority=True),
         Binding("ctrl+p", "agent_switcher", "Switch", priority=True),
         Binding("ctrl+b", "dispatch", "Dispatch", priority=True),
+        Binding("ctrl+e", "select_transcript", "Select", priority=True),
         Binding("f6", "next_module", "Module", priority=True),
         Binding("ctrl+l", "focus_command", "Command", priority=True),
         Binding("ctrl+s", "save_module", "Save", priority=True),
@@ -943,7 +1011,8 @@ class CyberdeckApp(App[None]):
         "/dispatch": "transmit to multiple ready agents",
         "/send": "send a prompt to one ready agent",
         "/pipe": "forward the latest response to an agent",
-        "/copy": "copy response, transcript, or text",
+        "/copy": "copy latest response, N responses, transcript, or text",
+        "/select": "select and copy whole transcript messages",
         "/kill": "disconnect an agent after confirmation",
         "/approve": "approve pending ICE requests",
         "/trust": "trust the latest ICE request for this session",
@@ -1348,7 +1417,12 @@ class CyberdeckApp(App[None]):
 
     async def _add_agent_item(self, state: AgentState, *, select: bool) -> None:
         view = self.query_one("#agents", ListView)
-        await view.append(ListItem(Label(self._agent_label(state))))
+        await view.append(
+            ListItem(
+                Label(self._agent_label(state)),
+                id=self._agent_row_id(state),
+            )
+        )
         if select: view.index = len(view.children) - 1
 
     @on(Input.Submitted, "#prompt")
@@ -1927,6 +2001,20 @@ class CyberdeckApp(App[None]):
     def action_dispatch(self) -> None:
         self.push_screen(DispatchScreen(self.manager.agents), self._dispatch_result)
 
+    def action_select_transcript(self) -> None:
+        state = self._active_agent()
+        entries = state.transcript if state else self._system_transcript
+        if not entries:
+            self._write_local("No transcript messages to select.")
+            return
+        self.push_screen(TranscriptSelection(list(entries)), self._selection_result)
+
+    def _selection_result(self, entries: list[TranscriptEntry] | None) -> None:
+        if not entries:
+            return
+        # Preserve each selected message verbatim; separators are plain text only.
+        self._copy_text("\n\n".join(entry.text for entry in entries))
+
     def _dispatch_result(self, result) -> None:
         if result: self._dispatch(*result)
 
@@ -1969,7 +2057,13 @@ class CyberdeckApp(App[None]):
 
     def _sync_agent_list(self) -> None:
         view = self.query_one("#agents", ListView); view.clear()
-        for state in self.manager.agents: view.append(ListItem(Label(self._agent_label(state))))
+        for state in self.manager.agents:
+            view.append(
+                ListItem(
+                    Label(self._agent_label(state)),
+                    id=self._agent_row_id(state),
+                )
+            )
         if self.manager.agents: view.index = min(view.index or 0, len(self.manager.agents) - 1)
     def _move_agent(self, direction: int) -> None:
         view = self.query_one("#agents", ListView)
@@ -2187,8 +2281,11 @@ class CyberdeckApp(App[None]):
                 support = "READY" if state.capabilities.context_compaction else "UNAVAILABLE"
                 self._write_local(
                     f"CONTEXT MATRIX // {state.config.name}\n"
+                    f"RUNTIME {state.config.provider} // "
+                    f"{state.model_provider}/{state.model or 'default'}\n"
                     f"USAGE   {usage}\n"
-                    f"COMPACT {support} // /compact"
+                    f"COMPACT {support} // /compact\n"
+                    "CLEAR   display only; provider context and identity remain // /clear"
                 )
         elif command == "/compact":
             state = self._active_agent()
@@ -2219,6 +2316,11 @@ class CyberdeckApp(App[None]):
         elif command == "/agent": self.action_agent_control()
         elif command == "/dispatch": self.action_dispatch()
         elif command == "/copy": self._copy_command(args)
+        elif command == "/select":
+            if args:
+                self._write_local("usage: /select")
+            else:
+                self.action_select_transcript()
         elif command in {"/send", "/pipe"}: self._route_command(command, args)
         elif command == "/kill": self._request_kill(args)
         elif command in {"/approve", "/trust", "/deny"}:
@@ -2549,8 +2651,22 @@ class CyberdeckApp(App[None]):
     def _copy_command(self, args: list[str]) -> None:
         state = self._active_agent()
         if args and args[0].casefold() == "all":
+            if len(args) != 1:
+                self._write_local("usage: /copy [N|all|TEXT]")
+                return
             entries = state.transcript if state else self._system_transcript
             text = "\n\n".join(f"{entry.role.upper()}: {entry.text}" for entry in entries)
+        elif len(args) == 1 and args[0].isdigit():
+            count = int(args[0])
+            if count < 1:
+                self._write_local("copy count must be at least 1")
+                return
+            entries = state.transcript if state else self._system_transcript
+            responses = [entry.text for entry in entries if entry.role == "assistant"]
+            if not responses:
+                self._write_local("nothing to copy: no assistant response")
+                return
+            text = "\n\n".join(responses[-count:])
         elif args:
             text = " ".join(args)
         else:
@@ -2843,17 +2959,24 @@ class CyberdeckApp(App[None]):
             view = self.screen_stack[0].query_one("#agents", ListView)
         except (IndexError, NoMatches):
             return
-        for item, state in zip(view.children, self.manager.agents, strict=False):
-            item.query_one(Label).update(self._agent_label(state))
+        for state in self.manager.agents:
+            try:
+                item = view.query_one(f"#{self._agent_row_id(state)}", ListItem)
+                item.query_one(Label).update(self._agent_label(state))
+            except NoMatches:
+                continue
 
     def _refresh_agent_label(self, state: AgentState) -> None:
         try:
-            index = self.manager.agents.index(state)
             view = self.screen_stack[0].query_one("#agents", ListView)
-            item = list(view.children)[index]
-        except (ValueError, IndexError, NoMatches):
+            item = view.query_one(f"#{self._agent_row_id(state)}", ListItem)
+        except (IndexError, NoMatches):
             return
         item.query_one(Label).update(self._agent_label(state))
+
+    @staticmethod
+    def _agent_row_id(state: AgentState) -> str:
+        return f"agent-{state.config.id.hex}"
 
     def _agent_label(self, state: AgentState) -> Text:
         color = {

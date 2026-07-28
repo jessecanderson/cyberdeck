@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len, chop_cells
 from textual.containers import VerticalScroll
-from textual.widgets import Input
+from textual.widgets import Input, Label, ListItem, Static
 
 from cyberdeck import __version__
 from cyberdeck.app import (
@@ -767,10 +767,56 @@ async def test_context_commands_report_usage_and_clear_only_local_display() -> N
         await pilot.app._run_local_command("/context")
         assert "32,000/128,000 tokens (25.0%)" in state.transcript[-1].text
         assert "COMPACT READY" in state.transcript[-1].text
+        assert "RUNTIME codex" in state.transcript[-1].text
+        assert "CLEAR   display only" in state.transcript[-1].text
 
         await pilot.app._run_local_command("/clear")
         assert state.transcript == []
         assert state.context_tokens == 32_000
+
+
+@pytest.mark.asyncio
+async def test_whole_message_selection_copies_verbatim_and_cancel_is_non_mutating() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend([
+            TranscriptEntry("user", "first\nline"),
+            TranscriptEntry("assistant", "second"),
+            TranscriptEntry("system", "third"),
+        ])
+        original = list(state.transcript)
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "down", "space", "enter")
+        await pilot.pause()
+        assert copied == ["first\nline\n\nsecond"]
+        assert state.transcript == original
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "escape")
+        await pilot.pause()
+        assert copied == ["first\nline\n\nsecond"]
+        assert state.transcript == original
+
+
+@pytest.mark.asyncio
+async def test_agent_label_refresh_uses_stable_row_identity() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        first = pilot.app.manager.register("first", Path("/tmp"), status=AgentStatus.READY)
+        second = pilot.app.manager.register("second", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(first, select=True)
+        await pilot.app._add_agent_item(second, select=False)
+
+        # A non-agent ListItem must not make label refresh depend on positional shape.
+        await pilot.app.query_one("#agents").append(ListItem(Static("decoy")))
+        second.status = AgentStatus.ERROR
+        pilot.app._refresh_agent_label(second)
+        row = pilot.app.query_one(f"#{pilot.app._agent_row_id(second)}")
+        assert "ATTN::FAULT" in str(row.query_one(Label).render())
 
 
 @pytest.mark.asyncio
@@ -786,6 +832,39 @@ async def test_copy_defaults_to_latest_assistant_response() -> None:
         await pilot.app._add_agent_item(state, select=True)
         await pilot.app._run_local_command("/copy")
         assert copied == ["latest"]
+
+
+@pytest.mark.asyncio
+async def test_copy_numeric_count_grabs_latest_assistant_outputs() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend([
+            TranscriptEntry("assistant", "oldest"),
+            TranscriptEntry("user", "question"),
+            TranscriptEntry("assistant", "middle\nresponse"),
+            TranscriptEntry("system", "diagnostic"),
+            TranscriptEntry("assistant", "latest"),
+        ])
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/copy 2")
+
+        assert copied == ["middle\nresponse\n\nlatest"]
+
+
+@pytest.mark.asyncio
+async def test_copy_numeric_count_rejects_zero() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "latest"))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/copy 0")
+
+        assert copied == []
+        assert "at least 1" in state.transcript[-1].text
 
 
 def test_macos_clipboard_uses_pbcopy(monkeypatch: pytest.MonkeyPatch) -> None:

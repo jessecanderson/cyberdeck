@@ -149,6 +149,24 @@ async def test_unexpected_stdout_eof_emits_transport_closed() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [b"not-json\n", b"[]\n", b'{"id":999,"result":{}}\n'])
+async def test_malformed_or_unknown_responses_close_transport_once(payload: bytes) -> None:
+    reader = asyncio.StreamReader(limit=CODEX_STREAM_LIMIT)
+    reader.feed_data(payload)
+    reader.feed_eof()
+    adapter = CodexAppServerAdapter()
+    adapter.process = type("Process", (), {"stdout": reader, "returncode": 7})()
+
+    await adapter._read_stdout()
+    await adapter._transport_closed("duplicate")
+
+    event = await adapter._events.get()
+    assert event is not None
+    assert event.kind == "transport_closed"
+    assert adapter._events.empty()
+
+
+@pytest.mark.asyncio
 async def test_intentional_stdout_eof_is_silent() -> None:
     reader = asyncio.StreamReader()
     reader.feed_eof()

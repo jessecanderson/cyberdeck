@@ -3,6 +3,29 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.4] - 2026-07-28
+
+### Added
+
+- Keyboard-driven whole-message transcript selection with exact plain-text
+  clipboard output and non-mutating cancellation.
+- Numeric `/copy N` selection for copying the latest N assistant outputs in
+  chronological order without leaving the command line.
+- Explicit runtime, usage, compaction capability, and display-only clearing
+  semantics in `/context`.
+
+### Changed
+
+- Identify sidebar agent rows by durable agent UUIDs so asynchronous refreshes
+  do not depend on transient child ordering or widget shape.
+- Make Homebrew tap publishing safe to rerun for an existing release branch or
+  open pull request while retaining checksum validation and protected auto-merge.
+
+### Fixed
+
+- Give transcript-selection movement, toggle, confirmation, and cancellation
+  bindings priority over the focused list widget.
+
 ## [0.3.3] - 2026-07-27
 
 ### Fixed
@@ -162,6 +185,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
 [0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
+[0.3.4]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.3...v0.3.4
 [0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jessecanderson/cyberdeck/releases/tag/v0.1.0

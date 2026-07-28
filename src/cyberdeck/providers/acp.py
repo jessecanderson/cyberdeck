@@ -53,6 +53,7 @@ class AcpAgentAdapter:
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
         self._loading_session = False
         self._assistant_segment = 0
         self._assistant_message_id: str | None = None
@@ -106,6 +107,7 @@ class AcpAgentAdapter:
 
     async def _initialize(self, cwd: Path) -> None:
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
         try:
             self.process = await asyncio.create_subprocess_exec(
                 *self.command,
@@ -413,6 +415,9 @@ class AcpAgentAdapter:
             self.model = str(models["currentModelId"])
 
     async def _transport_closed(self, reason: str) -> None:
+        if self._transport_failure_reported:
+            return
+        self._transport_failure_reported = True
         error = AcpProtocolError(reason)
         for future in self._pending.values():
             if not future.done():

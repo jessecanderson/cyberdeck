@@ -147,6 +147,11 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }
 #dispatch-dialog { width: 96; height: 80%; border: double $magenta; }
+#transcript-select-dialog { width: 96; height: 80%; border: double $cyan; background: $surface; padding: 1 2; }
+#transcript-select-title { height: 2; color: $cyan; text-style: bold; }
+#transcript-select-list { height: 1fr; margin: 1 0; background: #050a10; }
+#transcript-select-list > ListItem { height: auto; min-height: 2; padding: 0 1; }
+#transcript-select-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #confirm-title, #control-title, #switch-title, #dispatch-title {
     height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244;
 }
