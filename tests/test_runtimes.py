@@ -8,6 +8,7 @@ import pytest
 from cyberdeck.config import RuntimeConfig
 from cyberdeck.manager import AgentManager
 from cyberdeck.providers import AcpAgentAdapter
+from cyberdeck.providers.codex import CodexAppServerAdapter
 from cyberdeck.runtimes import RuntimeRegistry
 
 
@@ -50,3 +51,18 @@ def test_manager_registers_configured_runtime() -> None:
 def test_registry_rejects_reserved_runtime_override() -> None:
     with pytest.raises(ValueError, match="reserved"):
         RuntimeRegistry((RuntimeConfig("codex", "Other", (sys.executable,)),))
+
+
+def test_registry_passes_validated_codex_policy_to_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        RuntimeRegistry, "_find_executable", staticmethod(lambda _name: sys.executable)
+    )
+    registry = RuntimeRegistry(approval_policy="never", sandbox="read-only")
+
+    adapter = registry.create("codex")
+
+    assert isinstance(adapter, CodexAppServerAdapter)
+    assert adapter.approval_policy == "never"
+    assert adapter.sandbox == "read-only"

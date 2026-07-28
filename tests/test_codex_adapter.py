@@ -50,6 +50,18 @@ async def test_request_is_json_rpc() -> None:
 
 
 @pytest.mark.asyncio
+async def test_request_timeout_is_actionable_and_cleans_pending_request() -> None:
+    adapter = CodexAppServerAdapter(request_timeout=0.01)
+    writer = Writer()
+    adapter.process = type("Process", (), {"stdin": writer})()
+
+    with pytest.raises(CodexProtocolError, match=r"thread/start.*timed out.*/retry"):
+        await adapter._request("thread/start", {"cwd": "/tmp"})
+
+    assert adapter._pending == {}
+
+
+@pytest.mark.asyncio
 async def test_send_requires_started_thread() -> None:
     with pytest.raises(CodexProtocolError):
         await CodexAppServerAdapter().send("hello")

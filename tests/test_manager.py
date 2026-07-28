@@ -62,6 +62,8 @@ async def test_compact_context_uses_provider_and_returns_agent_ready() -> None:
     deck._adapters[str(state.config.id)] = adapter
     state.capabilities = adapter.capabilities
     state.context_tokens = 42_000
+    state.thread_id = "durable-thread"
+    original_transcript = list(state.transcript)
 
     await deck.compact_context(state)
 
@@ -69,6 +71,28 @@ async def test_compact_context_uses_provider_and_returns_agent_ready() -> None:
     assert state.status is AgentStatus.READY
     assert state.current_activity == "context compacted"
     assert state.context_tokens == 0
+    assert state.thread_id == "durable-thread"
+    assert state.transcript == original_transcript
+
+
+@pytest.mark.asyncio
+async def test_compact_context_failure_is_visible_and_recoverable() -> None:
+    class FailingCompactAdapter(FakeAdapter):
+        async def compact_context(self):
+            raise RuntimeError("provider rejected compaction")
+
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    adapter = FailingCompactAdapter()
+    deck._adapters[str(state.config.id)] = adapter
+    state.capabilities = adapter.capabilities
+
+    with pytest.raises(RuntimeError, match="provider rejected"):
+        await deck.compact_context(state)
+
+    assert state.status is AgentStatus.ERROR
+    assert state.current_activity == "context compaction failed"
+    assert state.error_message == "provider rejected compaction"
 
 
 @pytest.mark.asyncio

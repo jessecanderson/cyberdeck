@@ -28,8 +28,20 @@ class CodexProtocolError(RuntimeError):
 class CodexAppServerAdapter:
     """One Codex app-server process and one persistent Codex thread."""
 
-    def __init__(self, executable: str = "codex") -> None:
+    def __init__(
+        self,
+        executable: str = "codex",
+        *,
+        request_timeout: float = 30.0,
+        approval_policy: str = "on-request",
+        sandbox: str = "workspace-write",
+    ) -> None:
         self.executable = executable
+        if request_timeout <= 0:
+            raise ValueError("Codex request timeout must be positive")
+        self.request_timeout = request_timeout
+        self.approval_policy = approval_policy
+        self.sandbox = sandbox
         self.process: asyncio.subprocess.Process | None = None
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
@@ -97,8 +109,8 @@ class CodexAppServerAdapter:
             "thread/start",
             {
                 "cwd": str(cwd),
-                "approvalPolicy": "on-request",
-                "sandbox": "workspace-write",
+                "approvalPolicy": self.approval_policy,
+                "sandbox": self.sandbox,
                 "experimentalRawEvents": False,
             },
         )
@@ -116,8 +128,8 @@ class CodexAppServerAdapter:
             {
                 "threadId": thread_id,
                 "cwd": str(cwd),
-                "approvalPolicy": "on-request",
-                "sandbox": "workspace-write",
+                "approvalPolicy": self.approval_policy,
+                "sandbox": self.sandbox,
             },
         )
         self.thread_id = result.get("thread", {}).get("id", thread_id)
@@ -212,7 +224,13 @@ class CodexAppServerAdapter:
         self._compaction_done = asyncio.get_running_loop().create_future()
         try:
             await self._request("thread/compact/start", {"threadId": self.thread_id})
-            await self._compaction_done
+            try:
+                await asyncio.wait_for(self._compaction_done, timeout=self.request_timeout)
+            except TimeoutError as exc:
+                raise CodexProtocolError(
+                    f"Codex context compaction timed out after {self.request_timeout:g}s; "
+                    "the uplink can be restored with /retry"
+                ) from exc
         finally:
             self._compaction_done = None
 
@@ -255,7 +273,13 @@ class CodexAppServerAdapter:
         self._pending[request_id] = future
         await self._write({"id": request_id, "method": method, "params": params})
         try:
-            return await future
+            try:
+                return await asyncio.wait_for(future, timeout=self.request_timeout)
+            except TimeoutError as exc:
+                raise CodexProtocolError(
+                    f"Codex request '{method}' timed out after {self.request_timeout:g}s; "
+                    "check the Codex CLI and use /retry if the uplink was lost"
+                ) from exc
         finally:
             self._pending.pop(request_id, None)
 

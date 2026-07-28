@@ -19,6 +19,11 @@ visible transcript from replayed session updates. Disconnected Kiro sessions
 are not currently discoverable through the Codex-only Archive Uplink.
 
 Use `/runtimes` to refresh executable preflight and show detected versions.
+Cyberdeck 0.3.4 is exercised against the installed Codex CLI at test/run time
+rather than promising compatibility with an unbounded App Server version.
+App Server requests have a 30-second response timeout; a stalled or closed
+transport becomes an actionable per-agent error and can be restored with
+`/retry` when the runtime advertises session loading.
 Authentication remains owned by each CLI and is verified when an uplink
 connects; Cyberdeck does not read, copy, or store provider credentials.
 
@@ -38,6 +43,12 @@ Set the default and register another local ACP command in Cyberdeck's
 ```toml
 [agents]
 default_runtime = "work-agent"
+workspace_root = "/path/to/projects"
+approval_policy = "on-request"
+sandbox = "workspace-write"
+
+[deck]
+show_boot = true
 
 [[runtimes]]
 id = "work-agent"
@@ -51,6 +62,13 @@ and `kiro` are reserved built-in IDs. `command` is executed directly without a
 shell. When `environment_allowlist` is present, the child receives the basic
 process environment (`PATH`, `HOME`, locale variables) plus only those named
 variables. Values are never written back to the configuration file.
+
+`workspace_root` must be an existing directory. Supported approval policies
+are `untrusted`, `on-failure`, `on-request`, and `never`; supported sandbox
+values are `read-only`, `workspace-write`, and `danger-full-access`. Invalid
+values fall back safely and are reported at startup. Configuration never stores
+provider credentials. File configuration supplies defaults; an explicit
+`/new` path or runtime always wins for that uplink.
 
 Configured ACP agents must implement ACP protocol version 1 over newline-
 delimited JSON-RPC on stdin/stdout. Cyberdeck negotiates session loading and
@@ -71,6 +89,11 @@ Context compaction is capability-gated as well. Codex uses
 with the `/compact` command. Generic ACP v1 runtimes are marked unavailable
 because ACP does not standardize context compaction. `/clear` remains a
 Cyberdeck display operation and never implies provider-side context deletion.
+Cyberdeck 0.3.4 intentionally does not offer a destructive provider-context
+reset command: starting a fresh provider session remains an explicit new-uplink
+operation. Successful compaction preserves the active agent identity and local
+transcript; failures leave the agent visibly recoverable instead of guessing a
+provider-specific reset request.
 
 Dispatch can mix ready Codex, Kiro, and configured ACP agents. Each send is an
 independent turn; partial failures remain isolated and are never rolled back on

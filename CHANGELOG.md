@@ -20,11 +20,17 @@ All notable changes to Cyberdeck are documented here. The project follows
   do not depend on transient child ordering or widget shape.
 - Make Homebrew tap publishing safe to rerun for an existing release branch or
   open pull request while retaining checksum validation and protected auto-merge.
+- Add bounded startup defaults for workspace root, Codex approval policy,
+  sandbox mode, and boot visibility with safe validation fallbacks.
+- Add contributor, security, conduct, issue, and pull-request guidance.
 
 ### Fixed
 
 - Give transcript-selection movement, toggle, confirmation, and cancellation
   bindings priority over the focused list widget.
+- Time out stalled Codex App Server requests and context compaction with
+  actionable recovery guidance.
+- Preserve clipboard failure reporting in transcript selection mode.
 
 ## [0.3.3] - 2026-07-27
 

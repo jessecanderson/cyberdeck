@@ -804,6 +804,45 @@ async def test_whole_message_selection_copies_verbatim_and_cancel_is_non_mutatin
 
 
 @pytest.mark.asyncio
+async def test_selection_scrolls_and_preserves_markdown_code_text() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(
+        skip_boot=True, clipboard_writer=copied.append
+    ).run_test(size=(80, 24)) as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend(
+            TranscriptEntry("assistant", f"message {index}") for index in range(20)
+        )
+        code = "```python\nprint('signal')\n```"
+        state.transcript.append(TranscriptEntry("assistant", code))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press(*(["down"] * 20), "space", "enter")
+        await pilot.pause()
+
+        assert copied == [code]
+
+
+@pytest.mark.asyncio
+async def test_selection_reports_clipboard_failure() -> None:
+    def fail(_text: str) -> None:
+        raise RuntimeError("clipboard unavailable")
+
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=fail).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "signal"))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "enter")
+        await pilot.pause()
+
+        assert "CLIPBOARD FAULT" in state.transcript[-1].text
+
+@pytest.mark.asyncio
 async def test_agent_label_refresh_uses_stable_row_identity() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         first = pilot.app.manager.register("first", Path("/tmp"), status=AgentStatus.READY)

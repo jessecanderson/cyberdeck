@@ -57,6 +57,24 @@ def test_config_round_trip_preserves_runtime_definitions(tmp_path: Path) -> None
     assert store.load() == expected
 
 
+def test_config_validates_runtime_safety_values_and_workspace(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text(
+        '[deck]\nshow_boot = "sometimes"\n\n[agents]\n'
+        'default_runtime = "missing"\nworkspace_root = "/definitely/missing"\n'
+        'approval_policy = "always"\nsandbox = "unrestricted"\n',
+        encoding="utf-8",
+    )
+
+    config = store.load()
+
+    assert config.workspace_root is None
+    assert config.approval_policy == "on-request"
+    assert config.sandbox_mode == "workspace-write"
+    assert config.show_boot is True
+    assert len(store.errors) == 4
+
+
 def test_config_ignores_reserved_runtime_override_without_losing_preferences(
     tmp_path: Path,
 ) -> None:

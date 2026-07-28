@@ -1074,9 +1074,18 @@ class CyberdeckApp(App[None]):
         self.deck_config: DeckConfig = self.config_store.load()
         self.manager = manager or AgentManager(
             self._agent_event,
-            runtime_registry=RuntimeRegistry(self.deck_config.runtimes),
+            runtime_registry=RuntimeRegistry(
+                self.deck_config.runtimes,
+                approval_policy=self.deck_config.approval_policy,
+                sandbox=self.deck_config.sandbox_mode,
+            ),
         )
         self.manager._on_event = self._agent_event
+        if self.deck_config.default_runtime not in self.manager.available_providers:
+            self.config_store.errors.append(
+                f"Unknown default_runtime '{self.deck_config.default_runtime}'; using codex"
+            )
+            self.deck_config.default_runtime = "codex"
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
         self.module_registry = module_registry or ModuleRegistry()
         self._clipboard_writer = clipboard_writer
@@ -1194,9 +1203,12 @@ class CyberdeckApp(App[None]):
         self.call_after_refresh(lambda: self._activate_module(requested if requested in self.deck_modules else "agents"))
         for error in self._theme_errors:
             self.notify(error, title="THEME REJECTED", severity="warning")
+        for error in self.config_store.errors:
+            self.notify(error, title="CONFIGURATION FALLBACK", severity="warning")
         for module_id, error in self._module_errors.items():
             self.notify(error, title=f"MODULE FAULT // {module_id.upper()}", severity="error")
-        if not self.skip_boot: self.push_screen(BootScreen())
+        if not self.skip_boot and self.deck_config.show_boot:
+            self.push_screen(BootScreen())
 
     async def on_unmount(self) -> None:
         if self._journal_dirty:
@@ -2013,7 +2025,11 @@ class CyberdeckApp(App[None]):
         if not entries:
             return
         # Preserve each selected message verbatim; separators are plain text only.
-        self._copy_text("\n\n".join(entry.text for entry in entries))
+        text = "\n\n".join(entry.text for entry in entries)
+        try:
+            self._copy_text(text)
+        except RuntimeError as exc:
+            self._write_local(f"CLIPBOARD FAULT // {exc}")
 
     def _dispatch_result(self, result) -> None:
         if result: self._dispatch(*result)
@@ -2167,7 +2183,8 @@ class CyberdeckApp(App[None]):
                             "usage: /new CALLSIGN [RUNTIME] [PATH]"
                         )
                         return
-                path = Path(path_arg).expanduser().resolve() if path_arg else Path.cwd()
+                default_path = self.deck_config.workspace_root or Path.cwd()
+                path = Path(path_arg).expanduser().resolve() if path_arg else default_path
                 if provider not in self.manager.available_providers:
                     self._write_local(
                         f"unknown runtime: {provider} // choose "
