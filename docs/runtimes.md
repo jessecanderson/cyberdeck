@@ -49,6 +49,7 @@ sandbox = "workspace-write"
 
 [deck]
 show_boot = true
+density = "standard"
 
 [[runtimes]]
 id = "work-agent"
@@ -69,6 +70,11 @@ values are `read-only`, `workspace-write`, and `danger-full-access`. Invalid
 values fall back safely and are reported at startup. Configuration never stores
 provider credentials. File configuration supplies defaults; an explicit
 `/new` path or runtime always wins for that uplink.
+
+Workspace density is a presentation-only preference. `/density compact` or
+`F7` reduces post-boot workspace chrome and spacing; `/density standard`
+restores the full presentation. It does not change the boot animation, themes,
+commands, transcript data, approvals, navigation, or provider behavior.
 
 Configured ACP agents must implement ACP protocol version 1 over newline-
 delimited JSON-RPC on stdin/stdout. Cyberdeck negotiates session loading and

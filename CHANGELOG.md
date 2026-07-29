@@ -11,6 +11,8 @@ All notable changes to Cyberdeck are documented here. The project follows
   clipboard output and non-mutating cancellation.
 - Numeric `/copy N` selection for copying the latest N assistant outputs in
   chronological order without leaving the command line.
+- Presentation-only standard and compact workspace densities, selectable with
+  `/density` or `F7` and persisted independently from themes and boot behavior.
 - Explicit runtime, usage, compaction capability, and display-only clearing
   semantics in `/context`.
 

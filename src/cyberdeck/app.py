@@ -989,6 +989,7 @@ class CyberdeckApp(App[None]):
         Binding("ctrl+b", "dispatch", "Dispatch", priority=True),
         Binding("ctrl+e", "select_transcript", "Select", priority=True),
         Binding("f6", "next_module", "Module", priority=True),
+        Binding("f7", "toggle_density", "Density", priority=True),
         Binding("ctrl+l", "focus_command", "Command", priority=True),
         Binding("ctrl+s", "save_module", "Save", priority=True),
         Binding("escape", "workspace_focus", "Workspace", show=False),
@@ -1021,6 +1022,7 @@ class CyberdeckApp(App[None]):
         "/module": "activate or manage a deck module",
         "/next-module": "cycle to the next enabled deck module",
         "/theme": "select or import a color theme",
+        "/density": "show or set workspace density: standard|compact",
         "/journal": "open a dated journal entry",
         "/today": "open today's journal entry",
         "/save": "save the active journal entry",
@@ -1194,6 +1196,7 @@ class CyberdeckApp(App[None]):
         # Keep the transition rail in layout so transient alerts never resize the
         # conversation viewport; visibility hides only its paint.
         self.query_one("#state-transition").visible = False
+        self._apply_density(self.deck_config.density, persist=False)
         for module_id, widget in self.module_widgets.items():
             widget.display = module_id == "agents"
         self._update_rails(); self.set_interval(1, self._update_rails)
@@ -1684,6 +1687,10 @@ class CyberdeckApp(App[None]):
         ordered = self._ordered_enabled_module_ids()
         index = ordered.index(self.active_module_id)
         self._activate_module(ordered[(index + 1) % len(ordered)])
+
+    def action_toggle_density(self) -> None:
+        density = "compact" if self.deck_config.density == "standard" else "standard"
+        self._apply_density(density)
 
     def action_focus_command(self) -> None:
         self.screen_stack[0].query_one("#prompt", Input).focus()
@@ -2267,6 +2274,13 @@ class CyberdeckApp(App[None]):
                 self.action_next_module()
         elif command == "/theme":
             self._theme_command(args)
+        elif command == "/density":
+            if not args:
+                self._write_local(f"WORKSPACE DENSITY // {self.deck_config.density.upper()}")
+            elif len(args) != 1 or args[0].casefold() not in {"standard", "compact"}:
+                self._write_local("usage: /density [standard|compact]")
+            else:
+                self._apply_density(args[0].casefold())
         elif command in {"/journal", "/today", "/save"}:
             handlers = {
                 deck_command.name: deck_command.handler
@@ -2665,6 +2679,20 @@ class CyberdeckApp(App[None]):
         except OSError as exc:
             self.notify(str(exc), title="CONFIG WRITE FAILED", severity="warning")
 
+    def _apply_density(self, density: str, *, persist: bool = True) -> None:
+        """Apply workspace-only presentation density without changing behavior."""
+        main = self.screen_stack[0]
+        main.set_class(density == "compact", "compact")
+        self.deck_config.density = density
+        self._refresh_agent_labels()
+        self._render_active(follow_end=False)
+        if not persist or not self._persist_preferences:
+            return
+        try:
+            self.config_store.save(self.deck_config)
+        except OSError as exc:
+            self.notify(str(exc), title="CONFIG WRITE FAILED", severity="warning")
+
     def _copy_command(self, args: list[str]) -> None:
         state = self._active_agent()
         if args and args[0].casefold() == "all":
@@ -3022,6 +3050,8 @@ class CyberdeckApp(App[None]):
         elif state.unread_count:
             label.append(f"  ECHO +{state.unread_count}", style="bold #e9b949")
         label.append(f"  {state.status.value}", style="#7a879a")
+        if self.deck_config.density == "compact":
+            return label
         provider = (state.model_provider or state.config.provider).upper()
         label.append(f"\n  ├─ {provider} / LOCAL", style="#607087")
         label.append(f"\n  └─ {state.config.working_directory.name}", style="#46566c")

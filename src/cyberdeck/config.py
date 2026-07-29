@@ -39,6 +39,7 @@ class DeckConfig:
     approval_policy: str = "on-request"
     sandbox_mode: str = "workspace-write"
     show_boot: bool = True
+    density: str = "standard"
 
     @property
     def journal_path(self) -> Path:
@@ -103,6 +104,10 @@ class ConfigStore:
         if not isinstance(boot, bool):
             self.errors.append("Invalid show_boot value; using true")
             boot = True
+        density = str(data.get("deck", {}).get("density", "standard")).casefold()
+        if density not in {"standard", "compact"}:
+            self.errors.append(f"Invalid density '{density}'; using standard")
+            density = "standard"
         return DeckConfig(
             active_theme=str(data.get("deck", {}).get("theme", "ods")),
             active_module=str(data.get("deck", {}).get("module", "agents")),
@@ -115,6 +120,7 @@ class ConfigStore:
             approval_policy=approval_policy,
             sandbox_mode=sandbox_mode,
             show_boot=boot,
+            density=density,
         )
 
     def save(self, config: DeckConfig) -> None:
@@ -125,6 +131,7 @@ class ConfigStore:
             f'theme = "{_escape(config.active_theme)}"\n'
             f'module = "{_escape(config.active_module)}"\n\n'
             f"show_boot = {'true' if config.show_boot else 'false'}\n\n"
+            f'density = "{_escape(config.density)}"\n\n'
             "[journal]\n"
             f'directory = "{_escape(journal)}"\n'
             "\n[agents]\n"

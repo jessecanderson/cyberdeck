@@ -75,6 +75,19 @@ def test_config_validates_runtime_safety_values_and_workspace(tmp_path: Path) ->
     assert len(store.errors) == 4
 
 
+def test_config_rejects_unknown_density_without_affecting_boot(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text(
+        '[deck]\ndensity = "minimal"\nshow_boot = true\n', encoding="utf-8"
+    )
+
+    config = store.load()
+
+    assert config.density == "standard"
+    assert config.show_boot is True
+    assert store.errors == ["Invalid density 'minimal'; using standard"]
+
+
 def test_config_ignores_reserved_runtime_override_without_losing_preferences(
     tmp_path: Path,
 ) -> None:

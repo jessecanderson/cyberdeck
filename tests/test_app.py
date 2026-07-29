@@ -24,7 +24,7 @@ from cyberdeck.app import (
     ice_level,
     main,
 )
-from cyberdeck.config import RuntimeConfig
+from cyberdeck.config import ConfigStore, RuntimeConfig
 from cyberdeck.domain import (
     AgentCapabilities,
     AgentConfig,
@@ -252,7 +252,8 @@ def test_new_command_autocompletes_agent_runtimes() -> None:
         ("/trust", "trust the latest ICE request for this session")
     ]
     assert app._complete("/de") == [
-        ("/deny", "deny the latest ICE request")
+        ("/deny", "deny the latest ICE request"),
+        ("/density", "show or set workspace density: standard|compact"),
     ]
 
 
@@ -745,6 +746,36 @@ async def test_f6_and_slash_command_cycle_modules() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         await pilot.pause(0.2)
         assert pilot.app.active_module_id == "agents"
+
+
+@pytest.mark.asyncio
+async def test_density_command_and_f7_are_presentation_only_and_persisted(
+    tmp_path: Path,
+) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    async with CyberdeckApp(skip_boot=True, config_store=store).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "unchanged signal"))
+        await pilot.app._add_agent_item(state, select=True)
+        original = list(state.transcript)
+
+        await pilot.app._run_local_command("/density compact")
+        await pilot.pause()
+
+        assert pilot.app.screen_stack[0].has_class("compact")
+        assert pilot.app.deck_config.show_boot is True
+        assert store.load().density == "compact"
+        assert state.transcript == original
+        assert "\n" not in str(
+            pilot.app.query_one(f"#{pilot.app._agent_row_id(state)}").query_one(Label).render()
+        )
+
+        await pilot.press("f7")
+        await pilot.pause()
+
+        assert not pilot.app.screen_stack[0].has_class("compact")
+        assert store.load().density == "standard"
+        assert state.transcript == original
         await pilot.press("f6")
         await pilot.pause(0.2)
         assert pilot.app.active_module_id == "journal"
