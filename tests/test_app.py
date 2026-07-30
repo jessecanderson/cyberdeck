@@ -30,6 +30,9 @@ from cyberdeck.domain import (
     AgentConfig,
     AgentState,
     AgentStatus,
+    DeliveryOutcome,
+    DeliveryState,
+    DispatchRecord,
     OperationEntry,
     OperationState,
     PendingApproval,
@@ -138,6 +141,8 @@ async def test_help_screen_is_generated_from_every_registered_command() -> None:
         await pilot.app._run_local_command("/help")
         await pilot.pause()
         content = str(pilot.app.screen.query_one("#help-content").content)
+        assert all(group in content for group in ("AGENTS", "ROUTING", "CONTEXT", "SYSTEM"))
+        assert "/send" not in content
         for command in pilot.app._all_local_commands():
             assert command in content
 
@@ -1013,7 +1018,12 @@ async def test_pipe_handoff_combines_selected_outputs_and_operator_instruction()
         await pilot.app._run_local_command(
             "/pipe Ghost --last 2 Review these results for security."
         )
+        await pilot.pause()
         assert isinstance(pilot.app.screen, ConfirmScreen)
+        preview = str(pilot.app.screen.query_one("#confirm-message").content)
+        assert "Review these results for security." in preview
+        assert "first result" in preview
+        assert "second result" in preview
         await pilot.press("y")
         await pilot.pause()
 
@@ -1028,6 +1038,34 @@ async def test_pipe_handoff_combines_selected_outputs_and_operator_instruction()
         assert record.source_message_ids == ["one", "two"]
         assert record.target_callsign == "Ghost"
         assert record.state.value == "transmitted"
+        assert any(operation.kind == "handoff" for operation in pilot.app._operations_for(source))
+
+
+@pytest.mark.asyncio
+async def test_operations_include_dispatch_records_for_the_active_agent() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(state, select=True)
+        pilot.app.dispatch_records.append(
+            DispatchRecord(
+                "DSP-12345678",
+                "inspect the grid",
+                [
+                    DeliveryOutcome(
+                        state.config.id,
+                        state.config.name,
+                        DeliveryState.TRANSMITTED,
+                        42,
+                    )
+                ],
+            )
+        )
+
+        pilot.app._render_active()
+        await pilot.pause()
+
+        labels = [str(label.content) for label in pilot.app.query("#operations-list Label")]
+        assert any("dispatch" in label and "DSP-12345678" in label for label in labels)
 
 
 @pytest.mark.asyncio

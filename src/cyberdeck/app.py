@@ -44,6 +44,7 @@ from .domain import (
     DispatchRecord,
     HandoffRecord,
     OperationEntry,
+    OperationState,
     PendingApproval,
     ThreadSummary,
     TranscriptEntry,
@@ -233,10 +234,29 @@ class HelpScreen(ModalScreen[None]):
     def _help_text(self) -> str:
         width = max(map(len, self.commands), default=0)
         rows = ["DECK COMMAND INDEX // LOCAL CONTROL", ""]
-        rows.extend(
-            f"{name:<{width}}  {description}"
-            for name, description in self.commands.items()
-        )
+        groups = {
+            "AGENTS": {"/new", "/restore", "/agents", "/switch", "/agent", "/rename"},
+            "ROUTING": {"/dispatch", "/pipe", "/copy", "/select"},
+            "CONTEXT": {"/context", "/compact", "/clear", "/older"},
+            "LIFECYCLE": {"/interrupt", "/retry", "/disconnect", "/archive", "/kill"},
+            "APPROVALS": {"/approve", "/trust", "/deny"},
+            "WORKSPACE": {"/path", "/journal", "/today", "/save", "/preferences"},
+            "APPEARANCE": {"/theme", "/density"},
+            "SYSTEM": {"/runtimes", "/modules", "/module", "/next-module", "/about", "/help", "/quit"},
+        }
+        assigned: set[str] = set()
+        for label, names in groups.items():
+            entries = [(name, self.commands[name]) for name in self.commands if name in names]
+            if not entries:
+                continue
+            rows.extend([label, ""])
+            rows.extend(f"{name:<{width}}  {description}" for name, description in entries)
+            rows.append("")
+            assigned.update(name for name, _ in entries)
+        module_entries = [(name, value) for name, value in self.commands.items() if name not in assigned]
+        if module_entries:
+            rows.extend(["MODULE COMMANDS", ""])
+            rows.extend(f"{name:<{width}}  {description}" for name, description in module_entries)
         rows.extend([
             "",
             "KEYBOARD",
@@ -1110,6 +1130,7 @@ class CyberdeckApp(App[None]):
         self._system_transcript: list[TranscriptEntry] = []
         self.dispatch_records: list[DispatchRecord] = []
         self.handoff_records: list[HandoffRecord] = []
+        self._visible_operations: list[OperationEntry] = []
         self._prompt_completions: list[tuple[str, str]] = []
         self._completion_index = 0
         self._network_phase = 0
@@ -1681,9 +1702,9 @@ class CyberdeckApp(App[None]):
 
     @on(ListView.Selected, "#operations-list")
     def operation_selected(self, event: ListView.Selected) -> None:
-        state = self._active_agent()
-        if state and event.list_view.index is not None and event.list_view.index < len(state.operations):
-            self.push_screen(OperationDetail(state.operations[event.list_view.index]))
+        index = event.list_view.index
+        if index is not None and index < len(self._visible_operations):
+            self.push_screen(OperationDetail(self._visible_operations[index]))
 
     def action_operations(self) -> None:
         if self.active_module_id != "agents":
@@ -2148,8 +2169,8 @@ class CyberdeckApp(App[None]):
     def _render_operations(self) -> None:
         view = self.screen_stack[0].query_one("#operations-list", ListView); view.clear()
         state = self._active_agent()
-        if not state: return
-        for op in state.operations:
+        self._visible_operations = self._operations_for(state) if state else []
+        for op in self._visible_operations:
             glyph = {"succeeded": "✓", "failed": "!", "approval": "?", "running": "◐", "pending": "○"}[op.state.value]
             trace = self._trace_class(op)
             phase = {
@@ -2167,6 +2188,54 @@ class CyberdeckApp(App[None]):
                     )
                 )
             )
+
+    def _operations_for(self, state: AgentState) -> list[OperationEntry]:
+        rows = list(state.operations)
+        for record in self.dispatch_records:
+            outcome = next(
+                (target for target in record.targets if target.agent_id == state.config.id), None
+            )
+            if outcome:
+                rows.append(
+                    OperationEntry(
+                        "dispatch",
+                        f"{record.id} // {record.prompt[:80]}",
+                        OperationState.FAILED
+                        if outcome.state is DeliveryState.FAILED
+                        else OperationState.SUCCEEDED,
+                        created_at=record.created_at,
+                        duration_ms=outcome.elapsed_ms,
+                        arguments={
+                            "dispatch_id": record.id,
+                            "target": outcome.callsign,
+                            "prompt": record.prompt,
+                        },
+                        error=outcome.error,
+                    )
+                )
+        for record in self.handoff_records:
+            if state.config.id not in {record.source_agent_id, record.target_agent_id}:
+                continue
+            rows.append(
+                OperationEntry(
+                    "handoff",
+                    f"{record.id} // {record.source_callsign} → {record.target_callsign}",
+                    OperationState.FAILED
+                    if record.state is DeliveryState.FAILED
+                    else OperationState.SUCCEEDED,
+                    created_at=record.created_at,
+                    output=record.payload,
+                    arguments={
+                        "handoff_id": record.id,
+                        "source": record.source_callsign,
+                        "target": record.target_callsign,
+                        "source_messages": record.source_message_ids,
+                        "instruction": record.instruction,
+                    },
+                    error=record.error,
+                )
+            )
+        return sorted(rows, key=lambda operation: operation.created_at)
 
     @staticmethod
     def _trace_class(operation: OperationEntry) -> str:
@@ -2846,9 +2915,15 @@ class CyberdeckApp(App[None]):
             instruction=instruction,
             payload=payload,
         )
+        instruction_preview = instruction or "(no additional operator instruction)"
+        output_preview = source_text[:1200]
+        if len(source_text) > len(output_preview):
+            output_preview += "\n… [preview truncated; full selected output will be sent]"
         preview = (
             f"{record.id} // {source.config.name} → {target.config.name}\n"
-            f"{len(outputs)} output(s) // {len(payload)} characters"
+            f"{len(outputs)} output(s) // {len(payload)} characters\n\n"
+            f"OPERATOR INSTRUCTION\n{instruction_preview[:500]}\n\n"
+            f"SOURCE OUTPUT PREVIEW\n{output_preview}"
         )
         self.push_screen(
             ConfirmScreen("CONFIRM HANDOFF", preview),

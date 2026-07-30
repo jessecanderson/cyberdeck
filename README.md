@@ -198,6 +198,8 @@ agent. Add operator direction after the callsign, or select more outputs with
 Handoffs show a source/target preview and require confirmation. Cyberdeck keeps
 their attribution process-local; it does not persist their prompt content.
 `/send` remains an undocumented compatibility alias for 0.3.5 only.
+Related dispatch and handoff records appear alongside provider tool activity in
+the existing `Ctrl+O` Operations view; selecting one opens its attributed detail.
 
 Each multi-agent dispatch receives an ID. Inspect the latest result with
 `/dispatch last` or a specific result with `/dispatch DSP-...`. `/preferences`

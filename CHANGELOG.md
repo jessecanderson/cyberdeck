@@ -12,6 +12,8 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Stable dispatch IDs with per-target delivery status, timing, failure details,
   and `/dispatch ID` or `/dispatch last` inspection.
 - Versioned safe preferences with `/preferences` inspection and confirmed reset.
+- Dispatch and handoff telemetry in the existing `Ctrl+O` Operations view,
+  including attributed detail records and failure state.
 
 ### Changed
 
@@ -19,6 +21,13 @@ All notable changes to Cyberdeck are documented here. The project follows
   compatibility alias for one patch release with a deprecation notice.
 - Keep prompts, drafts, approvals, dispatch records, and handoff payloads
   process-local while persisting only bounded UI, workspace, and runtime defaults.
+- Group generated help by workflow and show bounded handoff contents before the
+  operator confirms transmission.
+
+### Fixed
+
+- Exercise the Codex initialize, connect, send, approval, interrupt, and clean
+  disconnect lifecycle through a real fake App Server subprocess in CI.
 
 ## [0.3.4] - 2026-07-28
 
