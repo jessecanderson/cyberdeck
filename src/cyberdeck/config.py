@@ -35,6 +35,11 @@ class DeckConfig:
     journal_directory: Path | None = None
     default_runtime: str = "codex"
     runtimes: tuple[RuntimeConfig, ...] = ()
+    workspace_root: Path | None = None
+    approval_policy: str = "on-request"
+    sandbox_mode: str = "workspace-write"
+    show_boot: bool = True
+    density: str = "standard"
 
     @property
     def journal_path(self) -> Path:
@@ -44,11 +49,16 @@ class DeckConfig:
 class ConfigStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or (_user_root("config") / "config.toml")
+        self.errors: list[str] = []
 
     def load(self) -> DeckConfig:
+        self.errors = []
         try:
             data = tomllib.loads(self.path.read_text(encoding="utf-8"))
-        except (FileNotFoundError, OSError, tomllib.TOMLDecodeError):
+        except FileNotFoundError:
+            return DeckConfig()
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            self.errors.append(f"Configuration ignored: {exc}")
             return DeckConfig()
         journal = data.get("journal", {})
         configured = journal.get("directory")
@@ -63,6 +73,7 @@ class ConfigStore:
                 or runtime_id in seen_runtime_ids
                 or runtime_id in {"codex", "kiro"}
             ):
+                self.errors.append("Ignored invalid, duplicate, or reserved runtime definition")
                 continue
             seen_runtime_ids.add(runtime_id)
             runtimes.append(
@@ -75,14 +86,41 @@ class ConfigStore:
                     ),
                 )
             )
+        agents = data.get("agents", {})
+        approval_policy = str(agents.get("approval_policy", "on-request"))
+        if approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+            self.errors.append(f"Invalid approval_policy '{approval_policy}'; using on-request")
+            approval_policy = "on-request"
+        sandbox_mode = str(agents.get("sandbox", "workspace-write"))
+        if sandbox_mode not in {"read-only", "workspace-write", "danger-full-access"}:
+            self.errors.append(f"Invalid sandbox '{sandbox_mode}'; using workspace-write")
+            sandbox_mode = "workspace-write"
+        workspace = agents.get("workspace_root")
+        workspace_root = Path(str(workspace)).expanduser() if workspace else None
+        if workspace_root is not None and not workspace_root.is_dir():
+            self.errors.append(f"Invalid workspace_root '{workspace_root}'; using current directory")
+            workspace_root = None
+        boot = data.get("deck", {}).get("show_boot", True)
+        if not isinstance(boot, bool):
+            self.errors.append("Invalid show_boot value; using true")
+            boot = True
+        density = str(data.get("deck", {}).get("density", "standard")).casefold()
+        if density not in {"standard", "compact"}:
+            self.errors.append(f"Invalid density '{density}'; using standard")
+            density = "standard"
         return DeckConfig(
             active_theme=str(data.get("deck", {}).get("theme", "ods")),
             active_module=str(data.get("deck", {}).get("module", "agents")),
             journal_directory=Path(configured).expanduser() if configured else None,
             default_runtime=str(
-                data.get("agents", {}).get("default_runtime", "codex")
+                agents.get("default_runtime", "codex")
             ).casefold(),
             runtimes=tuple(runtimes),
+            workspace_root=workspace_root,
+            approval_policy=approval_policy,
+            sandbox_mode=sandbox_mode,
+            show_boot=boot,
+            density=density,
         )
 
     def save(self, config: DeckConfig) -> None:
@@ -92,10 +130,15 @@ class ConfigStore:
             "[deck]\n"
             f'theme = "{_escape(config.active_theme)}"\n'
             f'module = "{_escape(config.active_module)}"\n\n'
+            f"show_boot = {'true' if config.show_boot else 'false'}\n\n"
+            f'density = "{_escape(config.density)}"\n\n'
             "[journal]\n"
             f'directory = "{_escape(journal)}"\n'
             "\n[agents]\n"
             f'default_runtime = "{_escape(config.default_runtime)}"\n'
+            f'approval_policy = "{_escape(config.approval_policy)}"\n'
+            f'sandbox = "{_escape(config.sandbox_mode)}"\n'
+            f'workspace_root = "{_escape(str(config.workspace_root or ""))}"\n'
         )
         for runtime in config.runtimes:
             command = ", ".join(f'"{_escape(part)}"' for part in runtime.command)

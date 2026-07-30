@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len, chop_cells
 from textual.containers import VerticalScroll
-from textual.widgets import Input
+from textual.widgets import Input, Label, ListItem, Static
 
 from cyberdeck import __version__
 from cyberdeck.app import (
@@ -24,7 +24,7 @@ from cyberdeck.app import (
     ice_level,
     main,
 )
-from cyberdeck.config import RuntimeConfig
+from cyberdeck.config import ConfigStore, RuntimeConfig
 from cyberdeck.domain import (
     AgentCapabilities,
     AgentConfig,
@@ -252,7 +252,8 @@ def test_new_command_autocompletes_agent_runtimes() -> None:
         ("/trust", "trust the latest ICE request for this session")
     ]
     assert app._complete("/de") == [
-        ("/deny", "deny the latest ICE request")
+        ("/deny", "deny the latest ICE request"),
+        ("/density", "show or set workspace density: standard|compact"),
     ]
 
 
@@ -696,6 +697,55 @@ async def test_arrow_keys_select_autocomplete_and_tab_accepts_highlight() -> Non
 
 
 @pytest.mark.asyncio
+async def test_density_autocomplete_advances_to_and_accepts_mode() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        prompt.value = "/dens"
+        await pilot.pause()
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert prompt.value == "/density "
+        assert [row[0] for row in pilot.app._prompt_completions] == [
+            "standard",
+            "compact",
+        ]
+
+        await pilot.press("down", "tab")
+        assert prompt.value == "/density compact"
+
+
+def test_density_argument_completion_filters_prefix_and_stops_when_complete() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    assert app._complete("/density c") == [
+        ("compact", "use compact workspace presentation")
+    ]
+    assert app._complete("/density compact") == []
+
+
+@pytest.mark.asyncio
+async def test_enter_accepts_highlighted_completion_before_submitting() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        prompt.value = "/density c"
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == "/density compact"
+        assert pilot.app.deck_config.density == "standard"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert pilot.app.deck_config.density == "compact"
+
+
+@pytest.mark.asyncio
 async def test_restore_space_binding_does_not_capture_normal_prompt_spaces() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         prompt = pilot.app.query_one("#prompt")
@@ -745,6 +795,36 @@ async def test_f6_and_slash_command_cycle_modules() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         await pilot.pause(0.2)
         assert pilot.app.active_module_id == "agents"
+
+
+@pytest.mark.asyncio
+async def test_density_command_and_f7_are_presentation_only_and_persisted(
+    tmp_path: Path,
+) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    async with CyberdeckApp(skip_boot=True, config_store=store).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "unchanged signal"))
+        await pilot.app._add_agent_item(state, select=True)
+        original = list(state.transcript)
+
+        await pilot.app._run_local_command("/density compact")
+        await pilot.pause()
+
+        assert pilot.app.screen_stack[0].has_class("compact")
+        assert pilot.app.deck_config.show_boot is True
+        assert store.load().density == "compact"
+        assert state.transcript == original
+        assert "\n" not in str(
+            pilot.app.query_one(f"#{pilot.app._agent_row_id(state)}").query_one(Label).render()
+        )
+
+        await pilot.press("f7")
+        await pilot.pause()
+
+        assert not pilot.app.screen_stack[0].has_class("compact")
+        assert store.load().density == "standard"
+        assert state.transcript == original
         await pilot.press("f6")
         await pilot.pause(0.2)
         assert pilot.app.active_module_id == "journal"
@@ -767,10 +847,95 @@ async def test_context_commands_report_usage_and_clear_only_local_display() -> N
         await pilot.app._run_local_command("/context")
         assert "32,000/128,000 tokens (25.0%)" in state.transcript[-1].text
         assert "COMPACT READY" in state.transcript[-1].text
+        assert "RUNTIME codex" in state.transcript[-1].text
+        assert "CLEAR   display only" in state.transcript[-1].text
 
         await pilot.app._run_local_command("/clear")
         assert state.transcript == []
         assert state.context_tokens == 32_000
+
+
+@pytest.mark.asyncio
+async def test_whole_message_selection_copies_verbatim_and_cancel_is_non_mutating() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend([
+            TranscriptEntry("user", "first\nline"),
+            TranscriptEntry("assistant", "second"),
+            TranscriptEntry("system", "third"),
+        ])
+        original = list(state.transcript)
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "down", "space", "enter")
+        await pilot.pause()
+        assert copied == ["first\nline\n\nsecond"]
+        assert state.transcript == original
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "escape")
+        await pilot.pause()
+        assert copied == ["first\nline\n\nsecond"]
+        assert state.transcript == original
+
+
+@pytest.mark.asyncio
+async def test_selection_scrolls_and_preserves_markdown_code_text() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(
+        skip_boot=True, clipboard_writer=copied.append
+    ).run_test(size=(80, 24)) as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend(
+            TranscriptEntry("assistant", f"message {index}") for index in range(20)
+        )
+        code = "```python\nprint('signal')\n```"
+        state.transcript.append(TranscriptEntry("assistant", code))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press(*(["down"] * 20), "space", "enter")
+        await pilot.pause()
+
+        assert copied == [code]
+
+
+@pytest.mark.asyncio
+async def test_selection_reports_clipboard_failure() -> None:
+    def fail(_text: str) -> None:
+        raise RuntimeError("clipboard unavailable")
+
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=fail).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "signal"))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.press("ctrl+e")
+        await pilot.pause()
+        await pilot.press("space", "enter")
+        await pilot.pause()
+
+        assert "CLIPBOARD FAULT" in state.transcript[-1].text
+
+@pytest.mark.asyncio
+async def test_agent_label_refresh_uses_stable_row_identity() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        first = pilot.app.manager.register("first", Path("/tmp"), status=AgentStatus.READY)
+        second = pilot.app.manager.register("second", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app._add_agent_item(first, select=True)
+        await pilot.app._add_agent_item(second, select=False)
+
+        # A non-agent ListItem must not make label refresh depend on positional shape.
+        await pilot.app.query_one("#agents").append(ListItem(Static("decoy")))
+        second.status = AgentStatus.ERROR
+        pilot.app._refresh_agent_label(second)
+        row = pilot.app.query_one(f"#{pilot.app._agent_row_id(second)}")
+        assert "ATTN::FAULT" in str(row.query_one(Label).render())
 
 
 @pytest.mark.asyncio
@@ -786,6 +951,39 @@ async def test_copy_defaults_to_latest_assistant_response() -> None:
         await pilot.app._add_agent_item(state, select=True)
         await pilot.app._run_local_command("/copy")
         assert copied == ["latest"]
+
+
+@pytest.mark.asyncio
+async def test_copy_numeric_count_grabs_latest_assistant_outputs() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.extend([
+            TranscriptEntry("assistant", "oldest"),
+            TranscriptEntry("user", "question"),
+            TranscriptEntry("assistant", "middle\nresponse"),
+            TranscriptEntry("system", "diagnostic"),
+            TranscriptEntry("assistant", "latest"),
+        ])
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/copy 2")
+
+        assert copied == ["middle\nresponse\n\nlatest"]
+
+
+@pytest.mark.asyncio
+async def test_copy_numeric_count_rejects_zero() -> None:
+    copied: list[str] = []
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.transcript.append(TranscriptEntry("assistant", "latest"))
+        await pilot.app._add_agent_item(state, select=True)
+
+        await pilot.app._run_local_command("/copy 0")
+
+        assert copied == []
+        assert "at least 1" in state.transcript[-1].text
 
 
 def test_macos_clipboard_uses_pbcopy(monkeypatch: pytest.MonkeyPatch) -> None:

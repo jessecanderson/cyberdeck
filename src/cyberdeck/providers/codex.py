@@ -28,8 +28,20 @@ class CodexProtocolError(RuntimeError):
 class CodexAppServerAdapter:
     """One Codex app-server process and one persistent Codex thread."""
 
-    def __init__(self, executable: str = "codex") -> None:
+    def __init__(
+        self,
+        executable: str = "codex",
+        *,
+        request_timeout: float = 30.0,
+        approval_policy: str = "on-request",
+        sandbox: str = "workspace-write",
+    ) -> None:
         self.executable = executable
+        if request_timeout <= 0:
+            raise ValueError("Codex request timeout must be positive")
+        self.request_timeout = request_timeout
+        self.approval_policy = approval_policy
+        self.sandbox = sandbox
         self.process: asyncio.subprocess.Process | None = None
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
@@ -54,6 +66,7 @@ class CodexAppServerAdapter:
             context_compaction=True,
         )
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
 
     async def _initialize(self, working_directory: Path) -> Path:
         cwd = working_directory.expanduser().resolve()
@@ -61,6 +74,7 @@ class CodexAppServerAdapter:
             raise ValueError(f"Working directory does not exist: {cwd}")
         self.cwd = cwd
         self._intentional_shutdown = False
+        self._transport_failure_reported = False
         self.process = await asyncio.create_subprocess_exec(
             self.executable,
             "app-server",
@@ -95,8 +109,8 @@ class CodexAppServerAdapter:
             "thread/start",
             {
                 "cwd": str(cwd),
-                "approvalPolicy": "on-request",
-                "sandbox": "workspace-write",
+                "approvalPolicy": self.approval_policy,
+                "sandbox": self.sandbox,
                 "experimentalRawEvents": False,
             },
         )
@@ -114,8 +128,8 @@ class CodexAppServerAdapter:
             {
                 "threadId": thread_id,
                 "cwd": str(cwd),
-                "approvalPolicy": "on-request",
-                "sandbox": "workspace-write",
+                "approvalPolicy": self.approval_policy,
+                "sandbox": self.sandbox,
             },
         )
         self.thread_id = result.get("thread", {}).get("id", thread_id)
@@ -210,7 +224,13 @@ class CodexAppServerAdapter:
         self._compaction_done = asyncio.get_running_loop().create_future()
         try:
             await self._request("thread/compact/start", {"threadId": self.thread_id})
-            await self._compaction_done
+            try:
+                await asyncio.wait_for(self._compaction_done, timeout=self.request_timeout)
+            except TimeoutError as exc:
+                raise CodexProtocolError(
+                    f"Codex context compaction timed out after {self.request_timeout:g}s; "
+                    "the uplink can be restored with /retry"
+                ) from exc
         finally:
             self._compaction_done = None
 
@@ -253,7 +273,13 @@ class CodexAppServerAdapter:
         self._pending[request_id] = future
         await self._write({"id": request_id, "method": method, "params": params})
         try:
-            return await future
+            try:
+                return await asyncio.wait_for(future, timeout=self.request_timeout)
+            except TimeoutError as exc:
+                raise CodexProtocolError(
+                    f"Codex request '{method}' timed out after {self.request_timeout:g}s; "
+                    "check the Codex CLI and use /retry if the uplink was lost"
+                ) from exc
         finally:
             self._pending.pop(request_id, None)
 
@@ -274,14 +300,24 @@ class CodexAppServerAdapter:
         try:
             while line := await self.process.stdout.readline():
                 message = json.loads(line)
+                if not isinstance(message, dict):
+                    raise CodexProtocolError("Codex message must be a JSON object")
                 if "id" in message and ("result" in message or "error" in message):
                     request_id = message["id"]
                     future = self._pending.get(request_id)
-                    if future and not future.done():
-                        if "error" in message:
-                            future.set_exception(CodexProtocolError(str(message["error"])))
-                        else:
-                            future.set_result(message.get("result", {}))
+                    if not future or future.done():
+                        raise CodexProtocolError(
+                            f"response for unknown request id: {request_id}"
+                        )
+                    if "error" in message:
+                        future.set_exception(CodexProtocolError(str(message["error"])))
+                    else:
+                        result = message.get("result")
+                        if not isinstance(result, dict):
+                            raise CodexProtocolError(
+                                f"invalid result for request id: {request_id}"
+                            )
+                        future.set_result(result)
                     continue
                 if "id" in message and "method" in message:
                     method = message.get("method", "")
@@ -300,7 +336,9 @@ class CodexAppServerAdapter:
                     continue
                 await self._handle_notification(message)
             if not self._intentional_shutdown:
-                await self._transport_closed("Codex app-server closed stdout")
+                returncode = getattr(self.process, "returncode", None)
+                suffix = f" (exit {returncode})" if returncode is not None else ""
+                await self._transport_closed(f"Codex app-server closed stdout{suffix}")
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001 - convert transport failures to agent events
@@ -308,6 +346,9 @@ class CodexAppServerAdapter:
                 await self._transport_closed(f"Codex transport failure: {exc}")
 
     async def _transport_closed(self, reason: str) -> None:
+        if self._transport_failure_reported:
+            return
+        self._transport_failure_reported = True
         error = CodexProtocolError(reason)
         for future in self._pending.values():
             if not future.done():

@@ -72,6 +72,23 @@ EmptyGrid { width: 100%; height: 1fr; padding: 4 6; content-align: center middle
 #prompt:focus { border: none; }
 #shortcut-rail { height: 2; padding: 0 2; background: $surface; color: $muted; content-align: right middle; }
 
+/* Compact density is workspace-only. BootScreen and behavior are unchanged. */
+.compact #top-rail { height: 1; padding: 0 1; }
+.compact #uplink-count { margin-left: 3; }
+.compact #sidebar { width: 28; min-width: 24; }
+.compact #sidebar-title, .compact #modules-title, .compact #spawn-hint { display: none; }
+.compact #agents > ListItem { height: 2; padding: 0 1; }
+.compact #modules { min-height: 4; max-height: 10; }
+.compact #modules > ListItem { height: 2; padding: 0 1; }
+.compact #agent-header { height: 2; padding: 0 1; }
+.compact #signal-trace { display: none; }
+.compact #conversation { margin: 0; padding: 0 1; }
+.compact TerminalMessage { margin-bottom: 0; }
+.compact #prompt-zone { height: 3; padding: 0; }
+.compact #prompt-label { display: none; }
+.compact #prompt-bar { height: 3; padding: 0; }
+.compact #shortcut-rail { height: 1; padding: 0 1; }
+
 #journal-header { height: 4; padding: 1 2; background: $surface; border-bottom: solid $magenta; }
 #journal-title { width: auto; color: $cyan; text-style: $deck-heading-style; }
 #journal-status { width: 1fr; color: $muted; content-align: right top; }
@@ -147,6 +164,11 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }
 #dispatch-dialog { width: 96; height: 80%; border: double $magenta; }
+#transcript-select-dialog { width: 96; height: 80%; border: double $cyan; background: $surface; padding: 1 2; }
+#transcript-select-title { height: 2; color: $cyan; text-style: bold; }
+#transcript-select-list { height: 1fr; margin: 1 0; background: #050a10; }
+#transcript-select-list > ListItem { height: auto; min-height: 2; padding: 0 1; }
+#transcript-select-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #confirm-title, #control-title, #switch-title, #dispatch-title {
     height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244;
 }

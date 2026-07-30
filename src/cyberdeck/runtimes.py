@@ -31,7 +31,15 @@ class RuntimePreflight:
 class RuntimeRegistry:
     """Runtime definitions, adapter construction, and credential-free preflight."""
 
-    def __init__(self, configured: tuple[RuntimeConfig, ...] = ()) -> None:
+    def __init__(
+        self,
+        configured: tuple[RuntimeConfig, ...] = (),
+        *,
+        approval_policy: str = "on-request",
+        sandbox: str = "workspace-write",
+    ) -> None:
+        self.approval_policy = approval_policy
+        self.sandbox = sandbox
         self._definitions: dict[str, RuntimeDefinition] = {
             "codex": RuntimeDefinition(
                 "codex", "Codex (native App Server)", "codex", ("codex",)
@@ -64,7 +72,11 @@ class RuntimeRegistry:
         definition = self.definition(runtime_id)
         if definition.kind == "codex":
             executable = self._resolve_executable(definition.command[0])
-            return CodexAppServerAdapter(executable)
+            return CodexAppServerAdapter(
+                executable,
+                approval_policy=self.approval_policy,
+                sandbox=self.sandbox,
+            )
         if definition.kind == "kiro":
             return KiroAcpAdapter(self._resolve_executable(definition.command[0]))
         command = (self._resolve_executable(definition.command[0]), *definition.command[1:])
