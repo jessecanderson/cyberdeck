@@ -42,6 +42,23 @@ class AgentManager:
         """Attach the UI event sink without exposing manager internals."""
         self._on_event = handler
 
+    def attach_adapter(self, state: AgentState, adapter: AgentAdapter) -> None:
+        """Bind an externally constructed adapter to a registered agent.
+
+        Runtime connections normally do this automatically. The explicit seam is
+        useful for embedders and deterministic tests without mutating private maps.
+        """
+        if state not in self.agents:
+            raise ValueError("Cannot attach an adapter to an unregistered agent")
+        self._adapters[str(state.config.id)] = adapter
+
+    def adapter_for(self, state: AgentState) -> AgentAdapter:
+        """Return the adapter bound to a registered agent."""
+        try:
+            return self._adapters[str(state.config.id)]
+        except KeyError as exc:
+            raise LookupError(f"No adapter attached to {state.config.name}") from exc
+
     @property
     def available_providers(self) -> tuple[str, ...]:
         return tuple(dict.fromkeys((*self.runtime_registry.ids, *self._adapter_factories)))
@@ -104,7 +121,7 @@ class AgentManager:
 
     async def connect(self, state: AgentState) -> None:
         adapter = self._new_adapter(state.config.provider)
-        self._adapters[str(state.config.id)] = adapter
+        self.attach_adapter(state, adapter)
         try:
             await adapter.start(state.config.working_directory, state.config.name)
             self._finish_connect(state, adapter)
@@ -128,7 +145,7 @@ class AgentManager:
         state.restored = True
         state.current_activity = "hydrating archived turns"
         adapter = self._new_adapter(summary.provider)
-        self._adapters[str(state.config.id)] = adapter
+        self.attach_adapter(state, adapter)
         try:
             page = await adapter.resume_thread(summary.id, summary.cwd)
             if not summary.name:
@@ -180,7 +197,7 @@ class AgentManager:
             raise ValueError(f"{state.config.provider} does not expose paged history")
         if not state.history_cursor:
             return HistoryPage()
-        page = await self._adapters[str(state.config.id)].list_turns(cursor=state.history_cursor)
+        page = await self.adapter_for(state).list_turns(cursor=state.history_cursor)
         state.transcript[0:0] = page.transcript
         state.operations[0:0] = page.operations
         state.history_cursor = page.next_cursor
@@ -196,7 +213,7 @@ class AgentManager:
         # immediately for every transport.
         self._on_event(state, AgentEvent("user_submitted", prompt))
         try:
-            await self._adapters[str(state.config.id)].send(prompt)
+            await self.adapter_for(state).send(prompt)
         except Exception as exc:
             if entry in state.transcript:
                 state.transcript.remove(entry)
@@ -215,13 +232,13 @@ class AgentManager:
             raise ValueError(f"Callsign already in use: {name}")
         if not state.thread_id:
             raise ValueError("Agent has no thread")
-        await self._adapters[str(state.config.id)].set_thread_name(state.thread_id, name)
+        await self.adapter_for(state).set_thread_name(state.thread_id, name)
         state.config.name = name
 
     async def interrupt(self, state: AgentState) -> None:
         if not state.capabilities.interrupt:
             raise ValueError(f"{state.config.provider} does not support interruption")
-        await self._adapters[str(state.config.id)].interrupt_turn()
+        await self.adapter_for(state).interrupt_turn()
         state.status = AgentStatus.READY
         state.current_activity = "turn interrupted"
 
@@ -233,7 +250,7 @@ class AgentManager:
         state.status = AgentStatus.PROCESSING
         state.current_activity = "compacting context"
         try:
-            await self._adapters[str(state.config.id)].compact_context()
+            await self.adapter_for(state).compact_context()
         except Exception as exc:
             state.status = AgentStatus.ERROR
             state.current_activity = "context compaction failed"
@@ -262,7 +279,7 @@ class AgentManager:
     async def archive(self, state: AgentState) -> None:
         if not state.capabilities.archive:
             raise ValueError(f"{state.config.provider} does not support archiving")
-        await self._adapters[str(state.config.id)].archive_thread()
+        await self.adapter_for(state).archive_thread()
         await self._remove(state)
 
     async def retry(self, state: AgentState) -> None:
@@ -281,7 +298,7 @@ class AgentManager:
         state.current_activity = "re-establishing uplink"
         state.recovery_attempts += 1
         adapter = self._new_adapter(state.config.provider)
-        self._adapters[key] = adapter
+        self.attach_adapter(state, adapter)
         try:
             page = await adapter.resume_thread(state.thread_id, state.config.working_directory)
             state.transcript[:] = page.transcript
@@ -327,7 +344,7 @@ class AgentManager:
     async def respond_approval(
         self, state: AgentState, request_id: int | str, decision: str
     ) -> None:
-        await self._adapters[str(state.config.id)].respond_approval(request_id, decision)
+        await self.adapter_for(state).respond_approval(request_id, decision)
         state.pending_approvals[:] = [
             approval for approval in state.pending_approvals if approval.request_id != request_id
         ]

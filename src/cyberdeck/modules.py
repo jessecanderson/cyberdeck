@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Protocol, runtime_checkable
 
 from textual.widget import Widget
 
@@ -42,6 +42,13 @@ class ModuleStatus(str, Enum):
     UPDATE_PENDING = "update_pending"
 
 
+@runtime_checkable
+class ModuleService(Protocol):
+    """Marker contract for named, versionable services exposed to modules."""
+
+    service_id: str
+
+
 @dataclass(frozen=True, slots=True)
 class ModuleContext:
     """Stable services available to a trusted in-process module."""
@@ -51,7 +58,7 @@ class ModuleContext:
     config_directory: Path
     notify: Callable[[str, str, str], None]
     copy_to_clipboard: Callable[[str], None]
-    services: dict[str, Any]
+    services: Mapping[str, ModuleService]
 
 
 @dataclass(frozen=True, slots=True)

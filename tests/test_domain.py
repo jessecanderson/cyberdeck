@@ -33,3 +33,19 @@ def test_parse_timestamp_normalizes_naive_datetimes_to_utc() -> None:
     parsed = parse_timestamp(datetime.fromisoformat("2026-07-30T12:00:00"))
 
     assert parsed.tzinfo is UTC
+
+
+def test_agent_transition_applies_error_and_ready_invariants() -> None:
+    state = AgentState(AgentConfig(name="ghost", working_directory=Path("/tmp")))
+    state.pending_approvals.append(PendingApproval(1, "approval"))
+
+    state.transition_to(
+        AgentStatus.ERROR,
+        "transport lost",
+        clear_approvals=True,
+    )
+
+    assert state.error_message == "transport lost"
+    assert state.pending_approvals == []
+    state.transition_to(AgentStatus.READY, "awaiting input")
+    assert state.error_message is None

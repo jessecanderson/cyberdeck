@@ -144,6 +144,24 @@ class AgentState:
     pending_approvals: list[PendingApproval] = field(default_factory=list)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
 
+    def transition_to(
+        self,
+        status: AgentStatus,
+        activity: str,
+        *,
+        error: str | None = None,
+        clear_approvals: bool = False,
+    ) -> None:
+        """Apply shared status invariants without constraining provider sequencing."""
+        self.status = status
+        self.current_activity = activity
+        if status is AgentStatus.ERROR:
+            self.error_message = error or activity
+        elif status is AgentStatus.READY:
+            self.error_message = None
+        if clear_approvals:
+            self.pending_approvals.clear()
+
 
 def parse_timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):

@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from cyberdeck.app import CyberdeckApp
-from cyberdeck.config import ConfigStore, DeckConfig, RuntimeConfig
+from cyberdeck.config import CONFIG_SCHEMA_VERSION, ConfigStore, DeckConfig, RuntimeConfig
 from cyberdeck.journal import JournalStore
 from cyberdeck.modules import ModuleInputMode
 from cyberdeck.themes import import_theme, load_theme
@@ -36,6 +36,29 @@ def test_config_round_trip(tmp_path: Path) -> None:
     expected = DeckConfig("afterglow", "journal", tmp_path / "notes")
     store.save(expected)
     assert store.load() == expected
+    assert store.path.read_text(encoding="utf-8").startswith(
+        f"schema_version = {CONFIG_SCHEMA_VERSION}"
+    )
+
+
+def test_unversioned_config_migrates_to_schema_one(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text('[deck]\ntheme = "afterglow"\n', encoding="utf-8")
+
+    config = store.load()
+
+    assert config.schema_version == CONFIG_SCHEMA_VERSION
+    assert config.active_theme == "afterglow"
+
+
+def test_future_config_schema_is_rejected_safely(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text('schema_version = 99\n[deck]\ntheme = "unsafe"\n', encoding="utf-8")
+
+    config = store.load()
+
+    assert config == DeckConfig()
+    assert "newer than supported" in store.errors[0]
 
 
 def test_config_round_trip_preserves_runtime_definitions(tmp_path: Path) -> None:

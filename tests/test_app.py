@@ -68,6 +68,18 @@ async def test_app_mounts() -> None:
         assert "電脳端末" in str(pilot.app.query_one("#deck-brand").content)
 
 
+@pytest.mark.asyncio
+async def test_public_application_test_seams_present_agents_and_run_commands() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+
+        await pilot.app.present_agent(state)
+        await pilot.app.execute_command("/path")
+
+        assert pilot.app.active_agent() is state
+        assert state.transcript[-1].text == str(Path("/tmp").resolve())
+
+
 def test_agent_label_exposes_real_local_provider_topology() -> None:
     app = CyberdeckApp(skip_boot=True)
     state = AgentState(
@@ -377,7 +389,7 @@ async def test_approve_all_requires_confirmation_and_resolves_batch() -> None:
             ]
         )
         adapter = ApprovalAdapter()
-        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        pilot.app.manager.attach_adapter(state, adapter)
         await pilot.app._add_agent_item(state, select=True)
 
         await pilot.app._run_local_command("/approve all")
@@ -416,7 +428,7 @@ async def test_ice_card_keeps_prompt_typing_and_accepts_slash_decision() -> None
             )
         )
         adapter = ApprovalAdapter()
-        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        pilot.app.manager.attach_adapter(state, adapter)
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
         pilot.app.query_one("#prompt").focus()
@@ -457,7 +469,7 @@ async def test_prompt_accepts_draft_while_acp_turn_remains_open() -> None:
         state = pilot.app.manager.register(
             "wintermute", Path("/tmp"), provider="kiro", status=AgentStatus.READY
         )
-        pilot.app.manager._adapters[str(state.config.id)] = DelayedAdapter()
+        pilot.app.manager.attach_adapter(state, DelayedAdapter())
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
 

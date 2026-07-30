@@ -65,12 +65,25 @@ def manager() -> AgentManager:
     return AgentManager(lambda state, event: None, adapter_factory=FakeAdapter)
 
 
+def test_adapter_binding_is_public_and_validates_registration() -> None:
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    adapter = FakeAdapter()
+
+    deck.attach_adapter(state, adapter)
+
+    assert deck.adapter_for(state) is adapter
+    foreign = manager().register("foreign", Path("/tmp"))
+    with pytest.raises(ValueError, match="unregistered"):
+        deck.attach_adapter(foreign, FakeAdapter())
+
+
 @pytest.mark.asyncio
 async def test_compact_context_uses_provider_and_returns_agent_ready() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = FakeAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
     state.capabilities = adapter.capabilities
     state.context_tokens = 42_000
     state.thread_id = "durable-thread"
@@ -95,7 +108,7 @@ async def test_compact_context_failure_is_visible_and_recoverable() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = FailingCompactAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
     state.capabilities = adapter.capabilities
 
     with pytest.raises(RuntimeError, match="provider rejected"):
@@ -111,7 +124,7 @@ async def test_compact_context_rejects_busy_or_unsupported_agent() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.PROCESSING)
     state.capabilities = AgentCapabilities(context_compaction=True)
-    deck._adapters[str(state.config.id)] = FakeAdapter()
+    deck.attach_adapter(state, FakeAdapter())
 
     with pytest.raises(ValueError, match="wait for READY"):
         await deck.compact_context(state)
@@ -139,7 +152,7 @@ async def test_send_announces_user_message_before_provider_finishes() -> None:
     )
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = DelayedAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
 
     send_task = asyncio.create_task(deck.send(state, "scan grid"))
     await asyncio.sleep(0)
@@ -198,7 +211,7 @@ def attach(manager, name):
     adapter = FakeAdapter()
     adapter.thread_id = state.thread_id
     state.capabilities = adapter.capabilities
-    manager._adapters[str(state.config.id)] = adapter
+    manager.attach_adapter(state, adapter)
     return state, adapter
 
 

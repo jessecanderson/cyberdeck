@@ -33,10 +33,9 @@ def apply_agent_event(state: AgentState, event: AgentEvent) -> None:
 
 def _status(state: AgentState, event: AgentEvent) -> None:
     normalized = "processing" if event.text == "working" else event.text
-    state.status = AgentStatus(normalized)
-    state.current_activity = (
-        "generating response" if state.status is AgentStatus.PROCESSING else "awaiting input"
-    )
+    status = AgentStatus(normalized)
+    activity = "generating response" if status is AgentStatus.PROCESSING else "awaiting input"
+    state.transition_to(status, activity)
 
 
 def _user_replay(state: AgentState, event: AgentEvent) -> None:
@@ -61,8 +60,7 @@ def _assistant_delta(state: AgentState, event: AgentEvent) -> None:
         state.transcript.append(
             TranscriptEntry("assistant", event.text, source_id=event.message_id)
         )
-    state.status = AgentStatus.PROCESSING
-    state.current_activity = "streaming response"
+    state.transition_to(AgentStatus.PROCESSING, "streaming response")
 
 
 def _operation(state: AgentState, event: AgentEvent) -> None:
@@ -72,15 +70,14 @@ def _operation(state: AgentState, event: AgentEvent) -> None:
         state.operations[state.operations.index(existing)] = operation
     else:
         state.operations.append(operation)
-    state.status = AgentStatus.EDITING if operation.kind == "fileChange" else AgentStatus.EXECUTING
-    state.current_activity = operation.summary
+    status = AgentStatus.EDITING if operation.kind == "fileChange" else AgentStatus.EXECUTING
+    state.transition_to(status, operation.summary)
     if event.method == "item/completed" and operation.state is OperationState.RUNNING:
         operation.state = OperationState.SUCCEEDED
 
 
 def _approval(state: AgentState, event: AgentEvent) -> None:
-    state.status = AgentStatus.FIREWALL_HOLD
-    state.current_activity = "ICE authorization required"
+    state.transition_to(AgentStatus.FIREWALL_HOLD, "ICE authorization required")
     if event.request_id is not None:
         state.pending_approvals.append(
             PendingApproval(
@@ -106,7 +103,9 @@ def _context_usage(state: AgentState, event: AgentEvent) -> None:
 
 
 def _failure(state: AgentState, event: AgentEvent) -> None:
-    state.status = AgentStatus.ERROR
-    state.current_activity = event.text
-    state.error_message = event.text
-    state.pending_approvals.clear()
+    state.transition_to(
+        AgentStatus.ERROR,
+        event.text,
+        error=event.text,
+        clear_approvals=True,
+    )

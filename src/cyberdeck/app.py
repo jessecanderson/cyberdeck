@@ -6,7 +6,6 @@ import getpass
 import platform
 import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Callable
 from datetime import date, datetime
@@ -30,6 +29,7 @@ from .builtin_modules import (
     BuiltinModuleSpec,
     JournalWorkspace,
 )
+from .clipboard import ClipboardService
 from .command_runtime import run_local_command
 from .commands import COMMANDS_BY_NAME, command_descriptions
 from .completion import complete_prompt
@@ -154,14 +154,14 @@ class CyberdeckApp(App[None]):
         self.config_store = config_store or ConfigStore()
         self.deck_config: DeckConfig = self.config_store.load()
         self.manager = manager or AgentManager(
-            self._agent_event,
+            self.receive_agent_event,
             runtime_registry=RuntimeRegistry(
                 self.deck_config.runtimes,
                 approval_policy=self.deck_config.approval_policy,
                 sandbox=self.deck_config.sandbox_mode,
             ),
         )
-        self.manager.set_event_handler(self._agent_event)
+        self.manager.set_event_handler(self.receive_agent_event)
         if self.deck_config.default_runtime not in self.manager.available_providers:
             self.config_store.errors.append(
                 f"Unknown default_runtime '{self.deck_config.default_runtime}'; using codex"
@@ -169,7 +169,7 @@ class CyberdeckApp(App[None]):
             self.deck_config.default_runtime = "codex"
         self.journal_store = journal_store or JournalStore(self.deck_config.journal_path)
         self.module_registry = module_registry or ModuleRegistry()
-        self._clipboard_writer = clipboard_writer
+        self.clipboard_service = ClipboardService(clipboard_writer)
         self.module_registry.apply_pending_updates()
         self._initialize_themes()
         self._initialize_application_state()
@@ -553,6 +553,12 @@ class CyberdeckApp(App[None]):
         )
         if select:
             view.index = len(view.children) - 1
+
+    async def present_agent(self, state: AgentState, *, select: bool = True) -> None:
+        """Mount a registered agent for embedders and deterministic tests."""
+        if state not in self.manager.agents:
+            raise ValueError("Cannot present an unregistered agent")
+        await self._add_agent_item(state, select=select)
 
     @on(Input.Submitted, "#prompt")
     async def send_prompt(self, event: Input.Submitted) -> None:
@@ -1166,6 +1172,10 @@ class CyberdeckApp(App[None]):
             else None
         )
 
+    def active_agent(self) -> AgentState | None:
+        """Return the agent selected in the primary workspace."""
+        return self._active_agent()
+
     def _render_active(self, *, follow_end: bool = True) -> None:
         main = self.screen_stack[0]
         state = self._active_agent()
@@ -1245,6 +1255,10 @@ class CyberdeckApp(App[None]):
         self._render_active()
 
     async def _run_local_command(self, command_line: str) -> None:
+        await self.execute_command(command_line)
+
+    async def execute_command(self, command_line: str) -> None:
+        """Execute one local deck command through the supported command boundary."""
         await run_local_command(self, command_line)
 
     def _all_local_commands(self) -> dict[str, str]:
@@ -1602,29 +1616,7 @@ class CyberdeckApp(App[None]):
         self._write_local(f"CLIPBOARD WRITE CONFIRMED // {len(text)} characters via {target}")
 
     def _copy_text(self, text: str) -> str:
-        if self._clipboard_writer is not None:
-            self._clipboard_writer(text)
-            return "configured writer"
-        if sys.platform == "darwin":
-            executable = shutil.which("pbcopy")
-            if not executable:
-                raise RuntimeError("pbcopy is unavailable")
-            try:
-                subprocess.run(
-                    [executable],
-                    input=text,
-                    text=True,
-                    check=True,
-                    timeout=2,
-                )
-            except (OSError, subprocess.SubprocessError) as exc:
-                raise RuntimeError(f"pbcopy failed: {exc}") from exc
-            return "pbcopy"
-        try:
-            self.copy_to_clipboard(text)
-        except Exception as exc:
-            raise RuntimeError(f"terminal clipboard failed: {exc}") from exc
-        return "terminal protocol"
+        return self.clipboard_service.write(text, self.copy_to_clipboard)
 
     def _find_agent(self, callsign: str) -> AgentState | None:
         name = callsign.casefold()
@@ -1788,6 +1780,10 @@ class CyberdeckApp(App[None]):
             self._update_rails()
             return
         self._refresh_all()
+
+    def receive_agent_event(self, state: AgentState, event: AgentEvent) -> None:
+        """Render an event after the manager applies its domain transition."""
+        self._agent_event(state, event)
 
     def _track_unread(self, state: AgentState, event: AgentEvent) -> None:
         if state is not self._active_agent() and event.kind == "assistant_delta":

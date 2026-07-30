@@ -20,6 +20,15 @@ All notable changes to Cyberdeck are documented here. The project follows
   supported Cyberdeck 0.3 release line.
 - Add public manager event-handler registration instead of mutating private state.
 - Enforce Ruff formatting and bounded complexity in CI.
+- Version the persisted configuration schema and migrate the legacy unversioned
+  layout while rejecting unsupported future schemas safely.
+- Define typed module services and split module CLI actions into focused handlers.
+- Add public manager and application seams for adapter binding, active-agent access,
+  event delivery, command execution, and deterministic UI presentation.
+- Centralize agent-state transition invariants, clipboard behavior, and shared
+  JSON-lines framing and transport cleanup helpers.
+- Document the supported Python API and add a repeatable large-transcript rendering
+  benchmark for performance-sensitive UI work.
 
 ## [0.3.4] - 2026-07-28
 

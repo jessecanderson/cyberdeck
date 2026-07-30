@@ -21,6 +21,7 @@ providers must not depend on Textual widgets or application screens.
   facade; new implementation code belongs in the focused UI modules.
 - `builtin_modules.py` contains retained built-in workspace widgets and their typed
   module specification.
+- `clipboard.py` owns platform and terminal clipboard selection and error conversion.
 - `app.py` is the Textual composition root. It owns widget composition, application
   coordination, and callbacks, but protocol parsing and command parsing do not live
   there.
@@ -39,5 +40,5 @@ providers must not depend on Textual widgets or application screens.
 CI runs Ruff linting, Ruff formatting checks, the full supported-Python test matrix,
 minimum-Textual tests, distribution builds, metadata validation, and a wheel smoke
 test. Complexity limits prevent another monolithic command or event dispatcher from
-being added. The legacy module-management CLI complexity exception remains scoped to
-that file and is tracked by issue #49.
+being added. Rendering throughput can be measured locally with
+`python scripts/benchmark_rendering.py` before changing transcript refresh behavior.
