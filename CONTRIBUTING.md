@@ -15,6 +15,16 @@ pytest -q
 ruff check .
 ```
 
+Run the current source tree without rebuilding or reinstalling after each edit:
+
+```bash
+./scripts/dev
+```
+
+The launcher uses `.venv/bin/python` and puts `src/` first on `PYTHONPATH`, so it
+cannot accidentally run an older wheel from the virtual environment. Arguments are
+passed through, including `./scripts/dev --version`.
+
 The application lives in `src/cyberdeck`. Provider transports are isolated in
 `src/cyberdeck/providers`; shared UI and manager code must use negotiated
 capabilities instead of provider-name conditionals. Tests use fake local

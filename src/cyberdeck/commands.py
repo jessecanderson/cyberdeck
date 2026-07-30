@@ -40,7 +40,11 @@ BUILTIN_COMMANDS = (
     CommandSpec("/archive", "archive and close the active uplink", handler="control"),
     CommandSpec("/dispatch", "transmit to multiple ready agents"),
     CommandSpec("/send", "send a prompt to one ready agent", handler="route"),
-    CommandSpec("/pipe", "forward the latest response to an agent", handler="route"),
+    CommandSpec(
+        "/pipe",
+        "forward latest response with optional instruction: /pipe CALLSIGN [INSTRUCTION]",
+        handler="route",
+    ),
     CommandSpec("/copy", "copy latest response, N responses, transcript, or text"),
     CommandSpec("/select", "select and copy whole transcript messages"),
     CommandSpec("/kill", "disconnect an agent after confirmation"),

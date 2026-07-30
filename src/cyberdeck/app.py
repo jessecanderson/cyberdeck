@@ -109,6 +109,7 @@ class CyberdeckApp(App[None]):
         Binding("f6", "next_module", "Module", priority=True),
         Binding("f7", "toggle_density", "Density", priority=True),
         Binding("ctrl+l", "focus_command", "Command", priority=True),
+        Binding("ctrl+u", "clear_prompt", "Clear input", show=False, priority=True),
         Binding("ctrl+s", "save_module", "Save", priority=True),
         Binding("escape", "workspace_focus", "Workspace", show=False),
         Binding("up", "prompt_previous", "History", show=False, priority=True),
@@ -329,6 +330,7 @@ class CyberdeckApp(App[None]):
             "prompt_previous",
             "prompt_next",
             "complete_prompt",
+            "clear_prompt",
         }:
             return main.query_one("#prompt", Input).has_focus
         if action == "focus_command":
@@ -563,8 +565,14 @@ class CyberdeckApp(App[None]):
     @on(Input.Submitted, "#prompt")
     async def send_prompt(self, event: Input.Submitted) -> None:
         if self._prompt_completions:
+            before = event.input.value
             self.action_complete_prompt()
-            return
+            if event.input.value != before:
+                return
+            # Never let stale exact-match completion state consume Enter without
+            # changing the prompt or submitting it.
+            self._prompt_completions = []
+            self._render_prompt_completions()
         prompt = event.value.strip()
         if not prompt:
             return
@@ -742,6 +750,18 @@ class CyberdeckApp(App[None]):
 
     def action_focus_command(self) -> None:
         self.screen_stack[0].query_one("#prompt", Input).focus()
+
+    def action_clear_prompt(self) -> None:
+        prompt = self.screen_stack[0].query_one("#prompt", Input)
+        prompt.value = ""
+        self._prompt_completions = []
+        self._completion_index = 0
+        self._history_index = None
+        self._history_draft = ""
+        state = self._active_agent()
+        if state:
+            state.prompt_draft = ""
+        self._render_prompt_completions()
 
     def action_workspace_focus(self) -> None:
         self.call_after_refresh(self._focus_active_workspace)
@@ -1625,7 +1645,8 @@ class CyberdeckApp(App[None]):
         )
 
     def _route_command(self, command: str, args: list[str]) -> None:
-        usage = f"usage: {command} CALLSIGN" + (" MESSAGE" if command == "/send" else "")
+        argument = " MESSAGE" if command == "/send" else " [INSTRUCTION]"
+        usage = f"usage: {command} CALLSIGN{argument}"
         if not args:
             self._write_local(usage)
             return
@@ -1657,6 +1678,9 @@ class CyberdeckApp(App[None]):
                 self._write_local("nothing to pipe: no assistant response")
                 return
             payload = latest.text
+            instruction = " ".join(args[1:]).strip()
+            if instruction:
+                payload = f"{payload}\n\n---\nOPERATOR INSTRUCTION:\n{instruction}"
         self._send_to_agent(target, payload, command[1:])
 
     @work(exclusive=False)

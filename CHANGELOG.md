@@ -5,6 +5,11 @@ All notable changes to Cyberdeck are documented here. The project follows
 
 ## [0.3.5] - 2026-07-30
 
+### Added
+
+- Clear the current unsent prompt, completion, and draft with `Ctrl+U` without
+  changing transcript or provider context.
+
 ### Changed
 
 - Split the Textual composition root into focused boot, modal, agent, transcript,
@@ -29,6 +34,13 @@ All notable changes to Cyberdeck are documented here. The project follows
   JSON-lines framing and transport cleanup helpers.
 - Document the supported Python API and add a repeatable large-transcript rendering
   benchmark for performance-sensitive UI work.
+
+### Fixed
+
+- Submit exact agent-target commands on Enter even if stale autocomplete state still
+  contains the already-complete callsign.
+- Include an optional operator instruction in `/pipe CALLSIGN [INSTRUCTION]` payloads
+  instead of silently discarding text after the target callsign.
 
 ## [0.3.4] - 2026-07-28
 

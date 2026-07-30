@@ -163,6 +163,8 @@ threads can be searched, multi-selected, and restored. `Ctrl+J` and `Ctrl+K`
 cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix, and
 `/switch CALLSIGN` jumps directly to a named uplink. Unsent
 drafts follow their agent, and Up/Down recalls process-local prompt history.
+Press `Ctrl+U` to discard the current unsent prompt or command without changing the
+transcript or provider context.
 
 `Ctrl+G` opens Operative Control for rename, interrupt, retry, disconnect, and
 archive actions. Disconnect is reversible through Archive Uplink. `Ctrl+B`

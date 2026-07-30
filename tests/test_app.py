@@ -789,7 +789,105 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
     assert app._complete("/send gh") == [("Ghost", "ready agent")]
     assert app._complete("/pipe ci") == [("Cipher", "ready agent")]
     assert ("all", "all connected agents") in app._complete("/kill a")
+    assert app._complete("/kill ghost") == []
     assert app._complete("/switch gh") == [("Ghost", "ready agent")]
+
+
+@pytest.mark.asyncio
+async def test_pipe_combines_latest_output_with_operator_instruction() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        source = pilot.app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+        target = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        source.transcript.append(TranscriptEntry("assistant", "Implementation summary"))
+        await pilot.app.present_agent(source)
+        await pilot.app.present_agent(target, select=False)
+        transmissions: list[tuple[AgentState, str, str]] = []
+        pilot.app._send_to_agent = lambda agent, payload, verb: transmissions.append(
+            (agent, payload, verb)
+        )
+
+        pilot.app._route_command("/pipe", ["Ghost", "Review", "this", "for", "risks"])
+
+        assert transmissions == [
+            (
+                target,
+                "Implementation summary\n\n---\nOPERATOR INSTRUCTION:\nReview this for risks",
+                "pipe",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_pipe_without_instruction_preserves_latest_output_payload() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        source = pilot.app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+        target = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        source.transcript.append(TranscriptEntry("assistant", "Implementation summary"))
+        await pilot.app.present_agent(source)
+        await pilot.app.present_agent(target, select=False)
+        transmissions: list[tuple[AgentState, str, str]] = []
+        pilot.app._send_to_agent = lambda agent, payload, verb: transmissions.append(
+            (agent, payload, verb)
+        )
+
+        pilot.app._route_command("/pipe", ["Ghost"])
+
+        assert transmissions == [(target, "Implementation summary", "pipe")]
+
+
+@pytest.mark.asyncio
+async def test_enter_submits_kill_with_exact_autocompleted_callsign() -> None:
+    submitted: list[str] = []
+
+    async def record_command(command_line: str) -> None:
+        submitted.append(command_line)
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.execute_command = record_command
+        pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        prompt = pilot.app.query_one("#prompt", Input)
+        prompt.focus()
+        prompt.value = "/kill gh"
+        await pilot.pause()
+
+        assert prompt.has_focus
+        assert pilot.app._prompt_completions == [("Ghost", "ready agent")]
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == "/kill Ghost"
+        assert pilot.app._prompt_completions == []
+        assert submitted == []
+
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert prompt.value == ""
+        assert submitted == ["/kill Ghost"]
+
+
+@pytest.mark.asyncio
+async def test_ctrl_u_clears_prompt_completion_history_navigation_and_agent_draft() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app.present_agent(state)
+        prompt = pilot.app.query_one("#prompt", Input)
+        prompt.focus()
+        prompt.value = "/kill gh"
+        state.prompt_draft = "/kill gh"
+        pilot.app._history_index = 0
+        pilot.app._history_draft = "remember me"
+        await pilot.pause()
+
+        assert pilot.app._prompt_completions == [("Ghost", "ready agent")]
+        await pilot.press("ctrl+u")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert pilot.app._prompt_completions == []
+        assert pilot.app._history_index is None
+        assert pilot.app._history_draft == ""
+        assert state.prompt_draft == ""
 
 
 @pytest.mark.asyncio

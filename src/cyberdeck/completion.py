@@ -102,6 +102,8 @@ def _agent(app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult:
     ]
     if words[0] == "/kill":
         candidates.append(("all", "all connected agents"))
+    if any(name.casefold() == prefix for name, _description in candidates):
+        return []
     return [
         (name, description)
         for name, description in candidates
