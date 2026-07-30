@@ -30,8 +30,8 @@ protected and requires the full Homebrew test-bot matrix.
 3. Create and push the matching annotated tag:
 
    ```bash
-   git tag -a v0.3.4 -m "Cyberdeck v0.3.4"
-   git push origin v0.3.4
+   git tag -a v0.3.6 -m "Cyberdeck v0.3.6"
+   git push origin v0.3.6
    ```
 
 The tag workflow then:

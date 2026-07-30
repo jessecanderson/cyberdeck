@@ -1,5 +1,7 @@
 import asyncio
 import json
+import sys
+from pathlib import Path
 
 import pytest
 
@@ -20,6 +22,54 @@ class Writer:
 
     async def drain(self) -> None:
         pass
+
+
+@pytest.mark.asyncio
+async def test_fake_app_server_connect_send_interrupt_approval_and_disconnect(
+    tmp_path: Path,
+) -> None:
+    executable = tmp_path / "fake-codex"
+    executable.write_text(
+        f"#!{sys.executable}\n"
+        "import json, sys\n"
+        "for line in sys.stdin:\n"
+        "    message = json.loads(line)\n"
+        "    method = message.get('method')\n"
+        "    if 'id' not in message or not method:\n"
+        "        continue\n"
+        "    request_id = message['id']\n"
+        "    if method == 'thread/start':\n"
+        "        result = {'thread': {'id': 'thread-fake'}, 'model': 'fake'}\n"
+        "    elif method == 'turn/start':\n"
+        "        result = {'turn': {'id': 'turn-fake'}}\n"
+        "    else:\n"
+        "        result = {}\n"
+        "    print(json.dumps({'id': request_id, 'result': result}), flush=True)\n"
+        "    if method == 'turn/start':\n"
+        "        print(json.dumps({'id': 77, 'method': "
+        "'item/commandExecution/requestApproval', 'params': {'command': 'pytest'}}), "
+        "flush=True)\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    adapter = CodexAppServerAdapter(str(executable), request_timeout=2)
+
+    await adapter.start(tmp_path, "ghost")
+    assert adapter.thread_id == "thread-fake"
+    assert (await adapter._events.get()).text == "ready"
+
+    await adapter.send("inspect")
+    events = [await adapter._events.get(), await adapter._events.get()]
+    approval = next(event for event in events if event.kind == "approval")
+    assert approval.request_id == 77
+    assert any(event.kind == "status" and event.text == "processing" for event in events)
+
+    await adapter.respond_approval(approval.request_id, "accept")
+    await adapter.interrupt_turn()
+    assert adapter.active_turn_id is None
+
+    await adapter.stop()
+    assert adapter.process and adapter.process.returncode is not None
 
 
 def test_agent_event_preserves_positional_provider_compatibility() -> None:

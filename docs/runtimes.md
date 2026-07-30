@@ -19,8 +19,12 @@ visible transcript from replayed session updates. Disconnected Kiro sessions
 are not currently discoverable through the Codex-only Archive Uplink.
 
 Use `/runtimes` to refresh executable preflight and show detected versions.
-Cyberdeck 0.3.4 is exercised against the installed Codex CLI at test/run time
-rather than promising compatibility with an unbounded App Server version.
+Cyberdeck 0.3.6 was field-validated with `codex-cli 0.146.0` and is exercised
+against a fake App Server lifecycle fixture in CI. The fixture covers
+initialize, connect, send, approval, interrupt, and clean disconnect through
+the real subprocess/stdio boundary. Cyberdeck also reports the installed Codex
+CLI at run time rather than promising compatibility with an unbounded App
+Server version.
 App Server requests have a 30-second response timeout; a stalled or closed
 transport becomes an actionable per-agent error and can be restored with
 `/retry` when the runtime advertises session loading.

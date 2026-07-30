@@ -3,7 +3,13 @@ from pathlib import Path
 
 import pytest
 
-from cyberdeck.domain import AgentCapabilities, AgentStatus, HistoryPage, PendingApproval
+from cyberdeck.domain import (
+    AgentCapabilities,
+    AgentStatus,
+    DeliveryState,
+    HistoryPage,
+    PendingApproval,
+)
 from cyberdeck.manager import AgentManager
 from cyberdeck.providers import AgentEvent
 
@@ -273,7 +279,11 @@ async def test_dispatch_preserves_mixed_runtime_identity() -> None:
 
     result = await deck.dispatch([codex, kiro], "status")
 
-    assert result == {"ghost": None, "molly": None}
+    assert [target.callsign for target in result.targets] == ["ghost", "molly"]
+    assert [target.state for target in result.targets] == [
+        DeliveryState.TRANSMITTED,
+        DeliveryState.TRANSMITTED,
+    ]
     assert codex.config.provider == "codex"
     assert kiro.config.provider == "kiro"
 
@@ -283,7 +293,11 @@ async def test_dispatch_partial_failure_marks_only_failed_target() -> None:
     deck = manager(); first, _ = attach(deck, "one"); second, failed = attach(deck, "two")
     failed.fail_send = True
     result = await deck.dispatch([first, second], "scan")
-    assert result == {"one": None, "two": "radio failure"}
+    assert [target.state for target in result.targets] == [
+        DeliveryState.TRANSMITTED,
+        DeliveryState.FAILED,
+    ]
+    assert result.targets[1].error == "radio failure"
     assert first.status is AgentStatus.PROCESSING
     assert second.status is AgentStatus.ERROR
     assert [entry.text for entry in first.transcript] == ["scan"]

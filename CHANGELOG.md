@@ -3,6 +3,32 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.6] - 2026-07-30
+
+### Added
+
+- Structured, confirmed `/pipe` handoffs that combine the latest one or more
+  assistant outputs with explicit operator instructions and local attribution.
+- Stable dispatch IDs with per-target delivery status, timing, failure details,
+  and `/dispatch ID` or `/dispatch last` inspection.
+- Versioned safe preferences with `/preferences` inspection and confirmed reset.
+- Dispatch and handoff telemetry in the existing `Ctrl+O` Operations view,
+  including attributed detail records and failure state.
+
+### Changed
+
+- Consolidate agent routing around `/pipe`; keep `/send` as an undocumented
+  compatibility alias for one patch release with a deprecation notice.
+- Keep prompts, drafts, approvals, dispatch records, and handoff payloads
+  process-local while persisting only bounded UI, workspace, and runtime defaults.
+- Group generated help by workflow and show bounded handoff contents before the
+  operator confirms transmission.
+
+### Fixed
+
+- Exercise the Codex initialize, connect, send, approval, interrupt, and clean
+  disconnect lifecycle through a real fake App Server subprocess in CI.
+
 ## [0.3.4] - 2026-07-28
 
 ### Added
@@ -193,6 +219,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
 [0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
+[0.3.6]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.5...v0.3.6
 [0.3.4]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.3...v0.3.4
 [0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.1.0...v0.2.0

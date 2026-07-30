@@ -40,6 +40,7 @@ class DeckConfig:
     sandbox_mode: str = "workspace-write"
     show_boot: bool = True
     density: str = "standard"
+    schema_version: int = 1
 
     @property
     def journal_path(self) -> Path:
@@ -108,6 +109,12 @@ class ConfigStore:
         if density not in {"standard", "compact"}:
             self.errors.append(f"Invalid density '{density}'; using standard")
             density = "standard"
+        schema_version = data.get("schema_version", 1)
+        if schema_version != 1:
+            self.errors.append(
+                f"Unsupported configuration schema '{schema_version}'; using safe defaults"
+            )
+            return DeckConfig()
         return DeckConfig(
             active_theme=str(data.get("deck", {}).get("theme", "ods")),
             active_module=str(data.get("deck", {}).get("module", "agents")),
@@ -121,12 +128,14 @@ class ConfigStore:
             sandbox_mode=sandbox_mode,
             show_boot=boot,
             density=density,
+            schema_version=schema_version,
         )
 
     def save(self, config: DeckConfig) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         journal = str(config.journal_directory) if config.journal_directory else ""
         content = (
+            f"schema_version = {config.schema_version}\n\n"
             "[deck]\n"
             f'theme = "{_escape(config.active_theme)}"\n'
             f'module = "{_escape(config.active_module)}"\n\n'

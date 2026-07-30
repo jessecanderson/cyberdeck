@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
+from time import monotonic
+from uuid import uuid4
 
 from .domain import (
     AgentCapabilities,
     AgentConfig,
     AgentState,
     AgentStatus,
+    DeliveryOutcome,
+    DeliveryState,
+    DispatchRecord,
     HistoryPage,
     OperationState,
     PendingApproval,
@@ -298,7 +304,7 @@ class AgentManager:
             self._on_event(state, AgentEvent("error", str(exc)))
             raise
 
-    async def dispatch(self, targets: list[AgentState], prompt: str) -> dict[str, str | None]:
+    async def dispatch(self, targets: list[AgentState], prompt: str) -> DispatchRecord:
         if len(targets) < 2:
             raise ValueError("Dispatch requires at least two targets")
         blocked = [
@@ -308,11 +314,25 @@ class AgentManager:
         ]
         if blocked:
             raise ValueError("Unavailable targets: " + ", ".join(blocked))
-        results = await asyncio.gather(
-            *(self.send(state, prompt) for state in targets), return_exceptions=True
+        record = DispatchRecord(
+            id=f"DSP-{uuid4().hex[:8].upper()}",
+            prompt=prompt,
+            targets=[DeliveryOutcome(state.config.id, state.config.name) for state in targets],
         )
-        summary: dict[str, str | None] = {}
-        for state, result in zip(targets, results, strict=True):
+
+        async def deliver(state: AgentState) -> tuple[BaseException | None, int]:
+            started = monotonic()
+            try:
+                await self.send(state, prompt)
+                return None, round((monotonic() - started) * 1000)
+            except Exception as exc:  # noqa: BLE001 - preserve partial dispatch results
+                return exc, round((monotonic() - started) * 1000)
+
+        results = await asyncio.gather(*(deliver(state) for state in targets))
+        for state, outcome, (result, elapsed_ms) in zip(
+            targets, record.targets, results, strict=True
+        ):
+            outcome.elapsed_ms = elapsed_ms
             if isinstance(result, BaseException):
                 # Dispatch is an explicit fan-out record: retain the attempted prompt on
                 # every target even though ordinary rejected sends are rolled back.
@@ -320,10 +340,12 @@ class AgentManager:
                 state.status = AgentStatus.ERROR
                 state.current_activity = "dispatch failed"
                 state.error_message = str(result)
-                summary[state.config.name] = str(result)
+                outcome.state = DeliveryState.FAILED
+                outcome.error = str(result)
             else:
-                summary[state.config.name] = None
-        return summary
+                outcome.state = DeliveryState.TRANSMITTED
+        record.completed_at = datetime.now().astimezone()
+        return record
 
     async def respond_approval(
         self, state: AgentState, request_id: int | str, decision: str

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cyberdeck-tui"
-version = "0.3.4"
+version = "0.3.6"
 description = "A neon multi-agent terminal interface for local coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
