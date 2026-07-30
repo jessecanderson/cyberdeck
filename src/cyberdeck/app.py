@@ -16,6 +16,7 @@ from datetime import date, datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import ClassVar
+from uuid import uuid4
 
 from rich import box
 from rich.cells import cell_len, chop_cells
@@ -39,6 +40,9 @@ from .config import ConfigStore, DeckConfig, user_theme_directory
 from .domain import (
     AgentState,
     AgentStatus,
+    DeliveryState,
+    DispatchRecord,
+    HandoffRecord,
     OperationEntry,
     PendingApproval,
     ThreadSummary,
@@ -1010,8 +1014,7 @@ class CyberdeckApp(App[None]):
         "/disconnect": "reversibly close the active uplink",
         "/archive": "archive and close the active uplink",
         "/dispatch": "transmit to multiple ready agents",
-        "/send": "send a prompt to one ready agent",
-        "/pipe": "forward the latest response to an agent",
+        "/pipe": "handoff output: /pipe CALLSIGN [--last N] [INSTRUCTION]",
         "/copy": "copy latest response, N responses, transcript, or text",
         "/select": "select and copy whole transcript messages",
         "/kill": "disconnect an agent after confirmation",
@@ -1023,6 +1026,7 @@ class CyberdeckApp(App[None]):
         "/next-module": "cycle to the next enabled deck module",
         "/theme": "select or import a color theme",
         "/density": "show or set workspace density: standard|compact",
+        "/preferences": "inspect or reset safe persisted preferences",
         "/journal": "open a dated journal entry",
         "/today": "open today's journal entry",
         "/save": "save the active journal entry",
@@ -1104,6 +1108,8 @@ class CyberdeckApp(App[None]):
             self.deck_config.active_theme = selected_theme
         self.theme = selected_theme
         self._system_transcript: list[TranscriptEntry] = []
+        self.dispatch_records: list[DispatchRecord] = []
+        self.handoff_records: list[HandoffRecord] = []
         self._prompt_completions: list[tuple[str, str]] = []
         self._completion_index = 0
         self._network_phase = 0
@@ -1588,7 +1594,7 @@ class CyberdeckApp(App[None]):
             ]
         if (
             words
-            and words[0] in {"/send", "/pipe", "/kill", "/switch"}
+            and words[0] in {"/pipe", "/kill", "/switch"}
             and len(words) == 2
         ):
             if value.endswith(" "):
@@ -2056,9 +2062,18 @@ class CyberdeckApp(App[None]):
     @work(exclusive=False)
     async def _dispatch(self, targets: list[AgentState], prompt: str) -> None:
         try:
-            results = await self.manager.dispatch(targets, prompt)
-            rows = [f"{name}: {'FAILED // ' + error if error else 'TRANSMITTED'}" for name, error in results.items()]
-            self._write_local("DISPATCH SUMMARY\n" + "\n".join(rows))
+            record = await self.manager.dispatch(targets, prompt)
+            self.dispatch_records.append(record)
+            rows = [
+                f"{target.callsign}: "
+                f"{'FAILED // ' + target.error if target.error else 'TRANSMITTED'} "
+                f"({target.elapsed_ms}ms)"
+                for target in record.targets
+            ]
+            self._write_local(
+                f"DISPATCH {record.id}\n" + "\n".join(rows)
+                + f"\nInspect with /dispatch {record.id}"
+            )
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"dispatch blocked: {exc}")
         self._refresh_all()
@@ -2293,6 +2308,8 @@ class CyberdeckApp(App[None]):
                 self._write_local("usage: /density [standard|compact]")
             else:
                 self._apply_density(args[0].casefold())
+        elif command == "/preferences":
+            self._preferences_command(args)
         elif command in {"/journal", "/today", "/save"}:
             handlers = {
                 deck_command.name: deck_command.handler
@@ -2357,7 +2374,11 @@ class CyberdeckApp(App[None]):
                 self._render_active()
         elif command == "/path": self._write_local(str(self._active_agent().config.working_directory if self._active_agent() else Path.cwd()))
         elif command == "/agent": self.action_agent_control()
-        elif command == "/dispatch": self.action_dispatch()
+        elif command == "/dispatch":
+            if args:
+                self._inspect_dispatch(args)
+            else:
+                self.action_dispatch()
         elif command == "/copy": self._copy_command(args)
         elif command == "/select":
             if args:
@@ -2773,7 +2794,7 @@ class CyberdeckApp(App[None]):
         return next((agent for agent in self.manager.agents if agent.config.name.casefold() == name), None)
 
     def _route_command(self, command: str, args: list[str]) -> None:
-        usage = f"usage: {command} CALLSIGN" + (" MESSAGE" if command == "/send" else "")
+        usage = "usage: /pipe CALLSIGN [--last N] [INSTRUCTION]"
         if not args:
             self._write_local(usage); return
         target = self._find_agent(args[0])
@@ -2782,19 +2803,181 @@ class CyberdeckApp(App[None]):
         if target.status is not AgentStatus.READY:
             self._write_local(f"{target.config.name} is {target.status.value.upper()}; requires READY"); return
         if command == "/send":
+            self._write_local("/send is deprecated; use /pipe CALLSIGN [--last N] [INSTRUCTION]")
             payload = " ".join(args[1:]).strip()
             if not payload:
+                self._write_local("usage: /send CALLSIGN MESSAGE"); return
+            self._send_to_agent(target, payload, "send")
+            return
+
+        source = self._active_agent()
+        if not source:
+            self._write_local("nothing to pipe: no active source agent"); return
+        if source is target:
+            self._write_local("handoff target must be a different agent"); return
+        count = 1
+        remaining = args[1:]
+        if remaining[:1] == ["--last"]:
+            if len(remaining) < 2 or not remaining[1].isdigit() or int(remaining[1]) < 1:
                 self._write_local(usage); return
-        else:
-            source = self._active_agent()
-            latest = next(
-                (entry for entry in reversed(source.transcript) if entry.role == "assistant"),
+            count = int(remaining[1])
+            remaining = remaining[2:]
+        outputs = [entry for entry in source.transcript if entry.role == "assistant"][-count:]
+        if not outputs:
+            self._write_local("nothing to pipe: no assistant response"); return
+        instruction = " ".join(remaining).strip()
+        source_text = "\n\n".join(entry.text for entry in outputs)
+        payload = source_text
+        if instruction:
+            payload = (
+                f"HANDOFF FROM {source.config.name.upper()}\n\n"
+                f"OPERATOR INSTRUCTION\n{instruction}\n\n"
+                f"SOURCE OUTPUT\n{source_text}"
+            )
+        record = HandoffRecord(
+            id=f"HOF-{uuid4().hex[:8].upper()}",
+            source_agent_id=source.config.id,
+            source_callsign=source.config.name,
+            target_agent_id=target.config.id,
+            target_callsign=target.config.name,
+            source_message_ids=[
+                entry.source_id or f"local:{source.transcript.index(entry)}" for entry in outputs
+            ],
+            instruction=instruction,
+            payload=payload,
+        )
+        preview = (
+            f"{record.id} // {source.config.name} → {target.config.name}\n"
+            f"{len(outputs)} output(s) // {len(payload)} characters"
+        )
+        self.push_screen(
+            ConfirmScreen("CONFIRM HANDOFF", preview),
+            lambda confirmed: self._send_handoff(target, record) if confirmed else None,
+        )
+
+    @work(exclusive=False)
+    async def _send_handoff(self, target: AgentState, record: HandoffRecord) -> None:
+        self.handoff_records.append(record)
+        try:
+            await self.manager.send(target, record.payload)
+            record.state = DeliveryState.TRANSMITTED
+            record.completed_at = datetime.now().astimezone()
+            self._write_local(f"handoff {record.id} transmitted to {target.config.name}")
+        except Exception as exc:  # noqa: BLE001
+            record.state = DeliveryState.FAILED
+            record.completed_at = datetime.now().astimezone()
+            record.error = str(exc)
+            target.status = AgentStatus.ERROR
+            target.current_activity = "handoff failed"
+            target.error_message = str(exc)
+            self._write_local(f"handoff {record.id} failed for {target.config.name}: {exc}")
+        self._refresh_all()
+
+    def _inspect_dispatch(self, args: list[str]) -> None:
+        if args[0].casefold() == "retry":
+            if len(args) != 3:
+                self._write_local("usage: /dispatch retry ID CALLSIGN"); return
+            record = self._find_dispatch(args[1])
+            target = self._find_agent(args[2])
+            outcome = next(
+                (
+                    row for row in record.targets
+                    if target and row.agent_id == target.config.id
+                ),
                 None,
-            ) if source else None
-            if not latest:
-                self._write_local("nothing to pipe: no assistant response"); return
-            payload = latest.text
-        self._send_to_agent(target, payload, command[1:])
+            ) if record else None
+            if not record or not target or not outcome:
+                self._write_local("unknown dispatch target"); return
+            if outcome.state is not DeliveryState.FAILED:
+                self._write_local(f"{target.config.name} did not fail in {record.id}"); return
+            if target.status is not AgentStatus.READY:
+                self._write_local(
+                    f"{target.config.name} is {target.status.value.upper()}; use /retry first"
+                ); return
+            self.push_screen(
+                ConfirmScreen(
+                    "RETRY DISPATCH TARGET",
+                    f"Resend {record.id} to {target.config.name}? Successful targets are unchanged.",
+                ),
+                lambda confirmed: self._retry_dispatch_target(record, outcome, target)
+                if confirmed else None,
+            )
+            return
+        record = self._find_dispatch(args[0])
+        if not record:
+            self._write_local(f"unknown dispatch: {args[0]}"); return
+        elapsed = (
+            f"{(record.completed_at - record.created_at).total_seconds():.2f}s"
+            if record.completed_at else "running"
+        )
+        rows = [
+            f"{target.callsign}: {target.state.value.upper()} ({target.elapsed_ms}ms)"
+            + (f" // {target.error}" if target.error else "")
+            for target in record.targets
+        ]
+        self._write_local(
+            f"DISPATCH {record.id} // {elapsed}\nPROMPT // {record.prompt}\n" + "\n".join(rows)
+        )
+        if len(args) == 2:
+            target = self._find_agent(args[1])
+            if not target or not any(row.agent_id == target.config.id for row in record.targets):
+                self._write_local(f"unknown dispatch target: {args[1]}"); return
+            self._switch_result(target)
+        elif len(args) > 2:
+            self._write_local("usage: /dispatch ID [CALLSIGN]")
+
+    def _find_dispatch(self, identifier: str) -> DispatchRecord | None:
+        identifier = identifier.upper()
+        if identifier == "LAST" and self.dispatch_records:
+            return self.dispatch_records[-1]
+        return next(
+            (row for row in reversed(self.dispatch_records) if row.id == identifier), None
+        )
+
+    @work(exclusive=False)
+    async def _retry_dispatch_target(self, record, outcome, target: AgentState) -> None:
+        started = datetime.now().astimezone()
+        try:
+            await self.manager.send(target, record.prompt)
+            outcome.state = DeliveryState.TRANSMITTED
+            outcome.error = None
+            outcome.elapsed_ms = round(
+                (datetime.now().astimezone() - started).total_seconds() * 1000
+            )
+            self._write_local(f"dispatch {record.id} retransmitted to {target.config.name}")
+        except Exception as exc:  # noqa: BLE001
+            outcome.error = str(exc)
+            self._write_local(f"dispatch {record.id} retry failed: {exc}")
+        self._refresh_all()
+
+    def _preferences_command(self, args: list[str]) -> None:
+        if not args:
+            config = self.deck_config
+            workspace = str(config.workspace_root) if config.workspace_root else "current directory"
+            self._write_local(
+                "SAFE PREFERENCES\n"
+                f"schema {config.schema_version} // runtime {config.default_runtime}\n"
+                f"workspace {workspace}\n"
+                f"module {config.active_module} // theme {config.active_theme} // "
+                f"density {config.density} // boot {'on' if config.show_boot else 'off'}\n"
+                "Prompts, drafts, credentials, approvals, dispatches, and handoffs are process-local."
+            )
+        elif args == ["reset"]:
+            self.push_screen(
+                ConfirmScreen(
+                    "RESET SAFE PREFERENCES",
+                    "Restore Cyberdeck UI, workspace, and runtime defaults? Provider sessions remain intact.",
+                ),
+                lambda confirmed: self._reset_preferences() if confirmed else None,
+            )
+        else:
+            self._write_local("usage: /preferences [reset]")
+
+    def _reset_preferences(self) -> None:
+        self.deck_config = DeckConfig()
+        self.config_store.save(self.deck_config)
+        self._apply_density("standard", persist=False)
+        self._write_local("SAFE PREFERENCES RESET // restart to apply all defaults")
 
     @work(exclusive=False)
     async def _send_to_agent(self, target: AgentState, payload: str, verb: str) -> None:

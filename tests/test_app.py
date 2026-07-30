@@ -669,7 +669,7 @@ def test_lifecycle_and_dispatch_commands_are_autocompletable() -> None:
     app = CyberdeckApp(skip_boot=True)
     expected = {
         "/agent", "/rename", "/interrupt", "/retry", "/disconnect",
-        "/archive", "/dispatch", "/copy", "/send", "/pipe", "/kill",
+        "/archive", "/dispatch", "/copy", "/pipe", "/kill", "/preferences",
         "/approve", "/trust", "/deny",
         "/runtimes",
     }
@@ -763,7 +763,7 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
     app = CyberdeckApp(skip_boot=True)
     app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
     app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
-    assert app._complete("/send gh") == [("Ghost", "ready agent")]
+    assert "/send" not in app.LOCAL_COMMANDS
     assert app._complete("/pipe ci") == [("Cipher", "ready agent")]
     assert ("all", "all connected agents") in app._complete("/kill a")
     assert app._complete("/switch gh") == [("Ghost", "ready agent")]
@@ -984,6 +984,69 @@ async def test_copy_numeric_count_rejects_zero() -> None:
 
         assert copied == []
         assert "at least 1" in state.transcript[-1].text
+
+
+@pytest.mark.asyncio
+async def test_pipe_handoff_combines_selected_outputs_and_operator_instruction() -> None:
+    class RecordingAdapter:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        async def send(self, prompt: str) -> None:
+            self.prompts.append(prompt)
+
+        async def stop(self) -> None:
+            pass
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        source = pilot.app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+        target = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        source.transcript.extend([
+            TranscriptEntry("assistant", "first result", source_id="one"),
+            TranscriptEntry("assistant", "second result", source_id="two"),
+        ])
+        adapter = RecordingAdapter()
+        pilot.app.manager._adapters[str(target.config.id)] = adapter
+        await pilot.app._add_agent_item(source, select=True)
+        await pilot.app._add_agent_item(target, select=False)
+
+        await pilot.app._run_local_command(
+            "/pipe Ghost --last 2 Review these results for security."
+        )
+        assert isinstance(pilot.app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert adapter.prompts == [
+            (
+                "HANDOFF FROM CIPHER\n\n"
+                "OPERATOR INSTRUCTION\nReview these results for security.\n\n"
+                "SOURCE OUTPUT\nfirst result\n\nsecond result"
+            )
+        ]
+        record = pilot.app.handoff_records[-1]
+        assert record.source_message_ids == ["one", "two"]
+        assert record.target_callsign == "Ghost"
+        assert record.state.value == "transmitted"
+
+
+@pytest.mark.asyncio
+async def test_preferences_are_inspectable_and_reset_with_confirmation(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    async with CyberdeckApp(skip_boot=True, config_store=store).run_test() as pilot:
+        pilot.app.deck_config.density = "compact"
+        store.save(pilot.app.deck_config)
+
+        await pilot.app._run_local_command("/preferences")
+        assert "schema 1" in pilot.app._system_transcript[-1].text
+        assert "process-local" in pilot.app._system_transcript[-1].text
+
+        await pilot.app._run_local_command("/preferences reset")
+        assert isinstance(pilot.app.screen, ConfirmScreen)
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert store.load().density == "standard"
 
 
 def test_macos_clipboard_uses_pbcopy(monkeypatch: pytest.MonkeyPatch) -> None:

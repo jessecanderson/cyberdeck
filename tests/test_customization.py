@@ -88,6 +88,18 @@ def test_config_rejects_unknown_density_without_affecting_boot(tmp_path: Path) -
     assert store.errors == ["Invalid density 'minimal'; using standard"]
 
 
+def test_config_rejects_unknown_schema_with_safe_defaults(tmp_path: Path) -> None:
+    store = ConfigStore(tmp_path / "config.toml")
+    store.path.write_text(
+        'schema_version = 99\n\n[deck]\ndensity = "compact"\n', encoding="utf-8"
+    )
+
+    config = store.load()
+
+    assert config == DeckConfig()
+    assert store.errors == ["Unsupported configuration schema '99'; using safe defaults"]
+
+
 def test_config_ignores_reserved_runtime_override_without_losing_preferences(
     tmp_path: Path,
 ) -> None:

@@ -100,7 +100,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.4/cyberdeck_tui-0.3.4-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.5/cyberdeck_tui-0.3.5-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"
@@ -172,9 +172,9 @@ agents.
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
 the active module. Start with `/help`; current commands include `/new`,
 `/restore`, `/agents`, `/runtimes`, `/agent`, `/rename`, `/interrupt`, `/retry`,
-`/disconnect`, `/archive`, `/dispatch`, `/switch`, `/module`, `/next-module`,
-`/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
-`/quit`. The help window is scrollable and includes commands contributed by
+`/disconnect`, `/archive`, `/dispatch`, `/pipe`, `/preferences`, `/switch`,
+`/module`, `/next-module`, `/theme`, `/journal`, `/context`, `/compact`,
+`/older`, `/clear`, `/path`, and `/quit`. The help window is scrollable and includes commands contributed by
 loaded modules. While autocomplete is visible, use Up/Down to highlight an
 option and Tab to accept it. The `Ctrl+P` Uplink Matrix likewise supports
 Up/Down and Enter without moving focus out of its search field.
@@ -184,6 +184,25 @@ whether compaction is available. `/compact` invokes native Codex compaction or
 Kiro's ACP command extension; it is never sent as an ordinary chat prompt.
 `/clear` only clears the local Cyberdeck transcript display and deliberately
 does not alter provider context.
+
+Use `/pipe CALLSIGN` to hand the active agent's latest output to another ready
+agent. Add operator direction after the callsign, or select more outputs with
+`--last N`:
+
+```text
+/pipe ghost
+/pipe ghost Review this result for security issues.
+/pipe ghost --last 2 Reconcile these findings and propose the next step.
+```
+
+Handoffs show a source/target preview and require confirmation. Cyberdeck keeps
+their attribution process-local; it does not persist their prompt content.
+`/send` remains an undocumented compatibility alias for 0.3.5 only.
+
+Each multi-agent dispatch receives an ID. Inspect the latest result with
+`/dispatch last` or a specific result with `/dispatch DSP-...`. `/preferences`
+shows the bounded state that survives restart; `/preferences reset` restores
+safe defaults after confirmation without altering provider-owned sessions.
 
 The canonical `/new` form puts the runtime before the optional path:
 

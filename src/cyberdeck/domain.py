@@ -54,6 +54,12 @@ class OperationState(str, Enum):
     APPROVAL = "approval"
 
 
+class DeliveryState(str, Enum):
+    PENDING = "pending"
+    TRANSMITTED = "transmitted"
+    FAILED = "failed"
+
+
 @dataclass(slots=True)
 class AgentConfig:
     name: str
@@ -93,6 +99,40 @@ class OperationEntry:
     duration_ms: int | None = None
     exit_code: int | None = None
     arguments: dict[str, Any] = field(default_factory=dict)
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class DeliveryOutcome:
+    agent_id: UUID
+    callsign: str
+    state: DeliveryState = DeliveryState.PENDING
+    elapsed_ms: int = 0
+    error: str | None = None
+
+
+@dataclass(slots=True)
+class DispatchRecord:
+    id: str
+    prompt: str
+    targets: list[DeliveryOutcome]
+    created_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    completed_at: datetime | None = None
+
+
+@dataclass(slots=True)
+class HandoffRecord:
+    id: str
+    source_agent_id: UUID
+    source_callsign: str
+    target_agent_id: UUID
+    target_callsign: str
+    source_message_ids: list[str]
+    instruction: str
+    payload: str
+    state: DeliveryState = DeliveryState.PENDING
+    created_at: datetime = field(default_factory=lambda: datetime.now().astimezone())
+    completed_at: datetime | None = None
     error: str | None = None
 
 
