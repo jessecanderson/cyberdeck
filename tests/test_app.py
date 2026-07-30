@@ -697,6 +697,55 @@ async def test_arrow_keys_select_autocomplete_and_tab_accepts_highlight() -> Non
 
 
 @pytest.mark.asyncio
+async def test_density_autocomplete_advances_to_and_accepts_mode() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        prompt.value = "/dens"
+        await pilot.pause()
+
+        await pilot.press("tab")
+        await pilot.pause()
+        assert prompt.value == "/density "
+        assert [row[0] for row in pilot.app._prompt_completions] == [
+            "standard",
+            "compact",
+        ]
+
+        await pilot.press("down", "tab")
+        assert prompt.value == "/density compact"
+
+
+def test_density_argument_completion_filters_prefix_and_stops_when_complete() -> None:
+    app = CyberdeckApp(skip_boot=True)
+    assert app._complete("/density c") == [
+        ("compact", "use compact workspace presentation")
+    ]
+    assert app._complete("/density compact") == []
+
+
+@pytest.mark.asyncio
+async def test_enter_accepts_highlighted_completion_before_submitting() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt")
+        prompt.focus()
+        prompt.value = "/density c"
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == "/density compact"
+        assert pilot.app.deck_config.density == "standard"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert pilot.app.deck_config.density == "compact"
+
+
+@pytest.mark.asyncio
 async def test_restore_space_binding_does_not_capture_normal_prompt_spaces() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         prompt = pilot.app.query_one("#prompt")

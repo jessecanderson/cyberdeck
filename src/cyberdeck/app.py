@@ -1442,6 +1442,9 @@ class CyberdeckApp(App[None]):
 
     @on(Input.Submitted, "#prompt")
     async def send_prompt(self, event: Input.Submitted) -> None:
+        if self._prompt_completions:
+            self.action_complete_prompt()
+            return
         prompt = event.value.strip()
         if not prompt: return
         self._prompt_history.append(prompt)
@@ -1522,7 +1525,9 @@ class CyberdeckApp(App[None]):
         completion = visible[self._completion_index][0]
         raw = prompt.value
         if raw.startswith("/") and " " not in raw:
-            prompt.value = completion + (" " if completion == "/new" else "")
+            prompt.value = completion + (
+                " " if completion in {"/new", "/density"} else ""
+            )
         else:
             head, separator, _ = raw.rpartition(" ")
             prompt.value = f"{head}{separator}{completion}"
@@ -1541,6 +1546,13 @@ class CyberdeckApp(App[None]):
             ]
         stripped = value.rstrip()
         words = stripped.split()
+        if words and words[0] == "/density" and len(words) <= 2:
+            prefix = "" if value.endswith(" ") else (words[1].casefold() if len(words) == 2 else "")
+            return [
+                (density, f"use {density} workspace presentation")
+                for density in ("standard", "compact")
+                if density.startswith(prefix) and density != prefix
+            ]
         if words and words[0] == "/module" and len(words) == 2 and not value.endswith(" "):
             prefix = words[1].casefold()
             actions = [
