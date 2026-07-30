@@ -73,7 +73,9 @@ class ModuleRegistry:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         payload = {
             "schema_version": REGISTRY_VERSION,
-            "modules": [asdict(record) for record in sorted(self.records.values(), key=lambda r: r.id)],
+            "modules": [
+                asdict(record) for record in sorted(self.records.values(), key=lambda r: r.id)
+            ],
         }
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
@@ -172,7 +174,12 @@ class ModuleRegistry:
             )
             python = self._environment_python(staging)
             command = [
-                str(python), "-m", "pip", "install", "--disable-pip-version-check", "--no-deps"
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--no-deps",
             ]
             if editable:
                 command.append("--editable")
@@ -308,9 +315,7 @@ class ModuleRegistry:
             if any(point.group == ENTRY_POINT_GROUP for point in distribution.entry_points)
         ]
         if len(module_distributions) != 1:
-            raise ValueError(
-                f"Expected one module distribution, found {len(module_distributions)}"
-            )
+            raise ValueError(f"Expected one module distribution, found {len(module_distributions)}")
         reserved = {"cyberdeck-tui", "textual", "packaging"}
         requirements: list[str] = []
         for raw in module_distributions[0].requires or []:

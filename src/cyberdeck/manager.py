@@ -10,12 +10,11 @@ from .domain import (
     AgentState,
     AgentStatus,
     HistoryPage,
-    OperationState,
     PendingApproval,
     ThreadSummary,
     TranscriptEntry,
-    operation_from_item,
 )
+from .event_reducer import apply_agent_event
 from .providers import AgentAdapter, AgentEvent
 from .runtimes import RuntimePreflight, RuntimeRegistry
 
@@ -38,6 +37,10 @@ class AgentManager:
             self._adapter_factories["codex"] = adapter_factory
         if adapter_factories:
             self._adapter_factories.update(adapter_factories)
+
+    def set_event_handler(self, handler: Callable[[AgentState, AgentEvent], None]) -> None:
+        """Attach the UI event sink without exposing manager internals."""
+        self._on_event = handler
 
     @property
     def available_providers(self) -> tuple[str, ...]:
@@ -224,13 +227,9 @@ class AgentManager:
 
     async def compact_context(self, state: AgentState) -> None:
         if not state.capabilities.context_compaction:
-            raise ValueError(
-                f"{state.config.provider} does not support context compaction"
-            )
+            raise ValueError(f"{state.config.provider} does not support context compaction")
         if state.status is not AgentStatus.READY:
-            raise ValueError(
-                f"{state.config.name} is {state.status.value}; wait for READY"
-            )
+            raise ValueError(f"{state.config.name} is {state.status.value}; wait for READY")
         state.status = AgentStatus.PROCESSING
         state.current_activity = "compacting context"
         try:
@@ -359,83 +358,7 @@ class AgentManager:
     async def _pump(self, state: AgentState, adapter: AgentAdapter) -> None:
         try:
             async for event in adapter.events():
-                if event.kind == "status":
-                    normalized = "processing" if event.text == "working" else event.text
-                    state.status = AgentStatus(normalized)
-                    state.current_activity = (
-                        "generating response"
-                        if state.status is AgentStatus.PROCESSING
-                        else "awaiting input"
-                    )
-                elif event.kind == "user_replay":
-                    latest = state.transcript[-1] if state.transcript else None
-                    if latest is not None and latest.role == "user":
-                        latest.text += event.text
-                    else:
-                        state.transcript.append(TranscriptEntry("user", event.text))
-                    state.current_activity = "hydrating provider session"
-                elif event.kind == "assistant_delta":
-                    latest = state.transcript[-1] if state.transcript else None
-                    same_message = (
-                        latest is not None
-                        and latest.role == "assistant"
-                        and (event.message_id is None or latest.source_id == event.message_id)
-                    )
-                    if same_message:
-                        assert latest is not None
-                        latest.text += event.text
-                    else:
-                        state.transcript.append(
-                            TranscriptEntry(
-                                "assistant",
-                                event.text,
-                                source_id=event.message_id,
-                            )
-                        )
-                    state.status = AgentStatus.PROCESSING
-                    state.current_activity = "streaming response"
-                elif event.kind == "operation":
-                    operation = operation_from_item(event.params or {})
-                    existing = next((op for op in state.operations if op.id == operation.id), None)
-                    if existing and operation.id:
-                        index = state.operations.index(existing)
-                        state.operations[index] = operation
-                    else:
-                        state.operations.append(operation)
-                    is_edit = operation.kind == "fileChange"
-                    state.status = AgentStatus.EDITING if is_edit else AgentStatus.EXECUTING
-                    state.current_activity = operation.summary
-                    if (
-                        event.method == "item/completed"
-                        and operation.state is OperationState.RUNNING
-                    ):
-                        operation.state = OperationState.SUCCEEDED
-                elif event.kind == "approval":
-                    state.status = AgentStatus.FIREWALL_HOLD
-                    state.current_activity = "ICE authorization required"
-                    if event.request_id is not None:
-                        state.pending_approvals.append(
-                            PendingApproval(
-                                request_id=event.request_id,
-                                method=event.method,
-                                params=event.params or {},
-                            )
-                        )
-                elif event.kind == "token_usage":
-                    usage = (event.params or {}).get("tokenUsage") or {}
-                    last = usage.get("last") or {}
-                    state.context_tokens = int(last.get("totalTokens") or 0)
-                    window = usage.get("modelContextWindow")
-                    state.context_window = int(window) if window else None
-                    state.context_percentage = None
-                elif event.kind == "context_usage":
-                    percentage = float((event.params or {}).get("percentage") or 0)
-                    state.context_percentage = max(0.0, min(100.0, percentage))
-                elif event.kind in {"error", "transport_closed"}:
-                    state.status = AgentStatus.ERROR
-                    state.current_activity = event.text
-                    state.error_message = event.text
-                    state.pending_approvals.clear()
+                apply_agent_event(state, event)
                 self._on_event(state, event)
         except asyncio.CancelledError:
             raise

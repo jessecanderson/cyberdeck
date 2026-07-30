@@ -8,7 +8,7 @@ import pytest
 
 from cyberdeck.providers import AcpAgentAdapter, AcpProtocolError
 
-FAKE_AGENT = r'''
+FAKE_AGENT = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -44,9 +44,9 @@ send({"jsonrpc":"2.0","method":"session/update","params":{
     "update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Scan complete."}},
 }})
 send({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}})
-'''
+"""
 
-FAKE_PERMISSION_AGENT = r'''
+FAKE_PERMISSION_AGENT = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -70,7 +70,7 @@ for request_id, title in (("permission-7", "write file"), ("permission-8", "run 
 answers = [receive(), receive()]
 assert {answer["id"] for answer in answers} == {"permission-7", "permission-8"}
 send({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}})
-'''
+"""
 
 
 def adapter(script: str) -> AcpAgentAdapter:
@@ -133,11 +133,11 @@ async def test_acp_keeps_overlapping_permission_option_lists_independent(
 
 @pytest.mark.asyncio
 async def test_acp_rejects_non_v1_agent(tmp_path: Path) -> None:
-    script = r'''
+    script = r"""
 import json, sys
 message = json.loads(sys.stdin.readline())
 print(json.dumps({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion":2}}), flush=True)
-'''
+"""
     agent = adapter(script)
     with pytest.raises(AcpProtocolError, match="version 1 required"):
         await agent.start(tmp_path)
@@ -146,11 +146,11 @@ print(json.dumps({"jsonrpc":"2.0","id":message["id"],"result":{"protocolVersion"
 
 @pytest.mark.asyncio
 async def test_acp_reports_malformed_json_as_transport_failure(tmp_path: Path) -> None:
-    script = r'''
+    script = r"""
 import sys
 sys.stdin.readline()
 print("{not-json", flush=True)
-'''
+"""
     agent = adapter(script)
     with pytest.raises(
         AcpProtocolError,
@@ -167,7 +167,7 @@ print("{not-json", flush=True)
 async def test_acp_resume_uses_session_load_and_preserves_session_id(
     tmp_path: Path,
 ) -> None:
-    script = r'''
+    script = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -204,7 +204,7 @@ send({"jsonrpc":"2.0","method":"session/update","params":{
     }}
 }})
 send({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}})
-'''
+"""
     agent = adapter(script)
 
     history = await agent.resume_thread("kiro-session-7", tmp_path)
@@ -228,7 +228,7 @@ send({"jsonrpc":"2.0","id":prompt["id"],"result":{"stopReason":"end_turn"}})
 async def test_acp_resume_waits_for_previous_process_session_lock(
     tmp_path: Path,
 ) -> None:
-    script = r'''
+    script = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -245,7 +245,7 @@ send({"jsonrpc":"2.0","id":first_load["id"],"error":{
 }})
 second_load = receive()
 send({"jsonrpc":"2.0","id":second_load["id"],"result":{}})
-'''
+"""
     agent = adapter(script)
 
     await agent.resume_thread("kiro-session-8", tmp_path)
@@ -256,7 +256,7 @@ send({"jsonrpc":"2.0","id":second_load["id"],"result":{}})
 
 @pytest.mark.asyncio
 async def test_acp_interrupt_uses_session_cancel_notification(tmp_path: Path) -> None:
-    script = r'''
+    script = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -272,7 +272,7 @@ cancel = receive()
 assert cancel == {"jsonrpc":"2.0","method":"session/cancel","params":{
     "sessionId":"cancel-me"
 }}
-'''
+"""
     agent = adapter(script)
     await agent.start(tmp_path)
 
@@ -286,7 +286,7 @@ assert cancel == {"jsonrpc":"2.0","method":"session/cancel","params":{
 async def test_kiro_context_compaction_uses_tagged_command_extension(
     tmp_path: Path,
 ) -> None:
-    script = r'''
+    script = r"""
 import json, sys
 
 def receive(): return json.loads(sys.stdin.readline())
@@ -305,7 +305,7 @@ assert compact["params"] == {
     "command":{"command":"compact","args":{}},
 }
 send({"jsonrpc":"2.0","id":compact["id"],"result":{"success":True}})
-'''
+"""
     agent = adapter(script)
     await agent.start(tmp_path)
 

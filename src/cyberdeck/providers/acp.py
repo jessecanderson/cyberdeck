@@ -270,9 +270,7 @@ class AcpAgentAdapter:
         self._next_id += 1
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self._write(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-        )
+        await self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         try:
             return await future
         finally:

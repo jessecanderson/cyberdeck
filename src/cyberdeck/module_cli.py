@@ -48,8 +48,12 @@ def run_module_command(args: argparse.Namespace) -> int:
         if not record:
             raise SystemExit(f"Module not found: {args.module_id}")
         for label, value in (
-            ("ID", record.id), ("PACKAGE", record.package), ("VERSION", record.version),
-            ("SOURCE", record.source), ("STATE", record.status), ("ERROR", record.error or "--"),
+            ("ID", record.id),
+            ("PACKAGE", record.package),
+            ("VERSION", record.version),
+            ("SOURCE", record.source),
+            ("STATE", record.status),
+            ("ERROR", record.error or "--"),
         ):
             print(f"{label:<10} {value}")
         return 0
@@ -102,7 +106,10 @@ def run_module_command(args: argparse.Namespace) -> int:
         registry.set_enabled(record.id, False)
         print(f"Disabled {record.id}")
     elif action == "remove":
-        if not args.yes and input(f"Remove {record.id} and its environment? [y/N] ").casefold() != "y":
+        if (
+            not args.yes
+            and input(f"Remove {record.id} and its environment? [y/N] ").casefold() != "y"
+        ):
             raise SystemExit("Module removal cancelled")
         registry.remove(record.id)
         print(f"Removed {record.id}")
@@ -121,9 +128,7 @@ def _context(registry: ModuleRegistry, module_id: str) -> ModuleContext:
         module_id=module_id,
         data_directory=registry.root / "data" / module_id,
         config_directory=registry.config_root / module_id,
-        notify=lambda message, title="MODULE", severity="information": print(
-            f"{title}: {message}"
-        ),
+        notify=lambda message, title="MODULE", severity="information": print(f"{title}: {message}"),
         copy_to_clipboard=lambda _text: None,
         services={},
     )
@@ -167,7 +172,7 @@ build-backend = "hatchling.build"
 name = "cyberdeck-module-{module_id}"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["cyberdeck-tui>=0.2,<0.3"]
+dependencies = ["cyberdeck-tui>=0.3,<0.4"]
 
 [project.entry-points."cyberdeck.modules"]
 {module_id} = "{package}:create_module"
@@ -176,7 +181,7 @@ dependencies = ["cyberdeck-tui>=0.2,<0.3"]
 packages = ["src/{package}"]
 """
 
-_MODULE_SOURCE = '''from textual.widgets import Static
+_MODULE_SOURCE = """from textual.widgets import Static
 
 from cyberdeck.modules import DeckModule, ModuleContext, ModuleManifest
 
@@ -187,7 +192,7 @@ class ExampleModule(DeckModule):
         title="{title}",
         description="External Cyberdeck workspace",
         version="0.1.0",
-        requires_cyberdeck=">=0.2,<0.3",
+        requires_cyberdeck=">=0.3,<0.4",
         author="Your Name",
         source="external",
         capabilities=("ui", "storage", "notifications"),
@@ -205,9 +210,9 @@ class ExampleModule(DeckModule):
 
 def create_module(context: ModuleContext) -> DeckModule:
     return ExampleModule(context)
-'''
+"""
 
-_TEST_SOURCE = '''from pathlib import Path
+_TEST_SOURCE = """from pathlib import Path
 
 from {package} import create_module
 from cyberdeck.modules import ModuleContext
@@ -216,4 +221,4 @@ from cyberdeck.modules import ModuleContext
 def test_manifest():
     context = ModuleContext("{module_id}", Path("data"), Path("config"), lambda *_: None, lambda _: None, {{}})
     assert create_module(context).manifest.id == "{module_id}"
-'''
+"""

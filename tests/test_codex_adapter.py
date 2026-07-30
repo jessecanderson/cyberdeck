@@ -94,7 +94,8 @@ async def test_interrupt_uses_active_turn_and_clears_it() -> None:
     task = asyncio.create_task(adapter.interrupt_turn())
     await asyncio.sleep(0)
     assert json.loads(writer.data) == {
-        "id": 1, "method": "turn/interrupt",
+        "id": 1,
+        "method": "turn/interrupt",
         "params": {"threadId": "thread-1", "turnId": "turn-2"},
     }
     adapter._pending[1].set_result({})
@@ -142,7 +143,9 @@ async def test_archive_uses_thread_registry() -> None:
     task = asyncio.create_task(adapter.archive_thread())
     await asyncio.sleep(0)
     assert json.loads(writer.data) == {
-        "id": 1, "method": "thread/archive", "params": {"threadId": "thread-1"}
+        "id": 1,
+        "method": "thread/archive",
+        "params": {"threadId": "thread-1"},
     }
     adapter._pending[1].set_result({})
     await task
@@ -276,9 +279,7 @@ async def test_token_usage_notification_becomes_agent_event() -> None:
             "modelContextWindow": 128000,
         },
     }
-    await adapter._handle_notification(
-        {"method": "thread/tokenUsage/updated", "params": params}
-    )
+    await adapter._handle_notification({"method": "thread/tokenUsage/updated", "params": params})
     event = await adapter._events.get()
     assert event is not None
     assert event.kind == "token_usage"

@@ -41,9 +41,7 @@ class RuntimeRegistry:
         self.approval_policy = approval_policy
         self.sandbox = sandbox
         self._definitions: dict[str, RuntimeDefinition] = {
-            "codex": RuntimeDefinition(
-                "codex", "Codex (native App Server)", "codex", ("codex",)
-            ),
+            "codex": RuntimeDefinition("codex", "Codex (native App Server)", "codex", ("codex",)),
             "kiro": RuntimeDefinition("kiro", "Kiro (ACP v1)", "kiro", ("kiro-cli", "acp")),
         }
         for runtime in configured:

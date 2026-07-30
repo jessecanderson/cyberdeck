@@ -126,12 +126,8 @@ def test_module_commands_complete_actions_and_external_module_ids(tmp_path: Path
         status=ModuleStatus.DISABLED.value,
     )
     app = CyberdeckApp(skip_boot=True, module_registry=registry)
-    assert app._complete("/module li") == [
-        ("link", "link an editable local module project")
-    ]
-    assert app._complete("/module enable sys") == [
-        ("system-status", "disabled external module")
-    ]
+    assert app._complete("/module li") == [("link", "link an editable local module project")]
+    assert app._complete("/module enable sys") == [("system-status", "disabled external module")]
 
 
 @pytest.mark.asyncio
@@ -213,15 +209,8 @@ def test_remove_rejects_previous_environment_outside_module_root(tmp_path: Path)
 def test_local_module_installs_into_user_owned_environment(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(module_registry_module, "__version__", "0.2.0")
+    monkeypatch.setattr(module_registry_module, "__version__", "0.3.5")
     project = scaffold_module("signal-status", tmp_path)
-    pyproject = project / "pyproject.toml"
-    pyproject.write_text(
-        pyproject.read_text(encoding="utf-8").replace(
-            "cyberdeck-tui>=0.2,<0.3", "cyberdeck-tui>=0.1,<0.3"
-        ),
-        encoding="utf-8",
-    )
     registry = ModuleRegistry(tmp_path / "modules", tmp_path / "config")
     distribution = tmp_path / "dist"
     subprocess.run(
@@ -294,7 +283,7 @@ async def test_external_command_collision_is_rejected_without_replacing_shell(
 ) -> None:
     class ConflictingModule(ExternalModule):
         def commands(self):
-            return DeckCommand("/help", "replace core help", lambda _args: None),
+            return (DeckCommand("/help", "replace core help", lambda _args: None),)
 
     async with CyberdeckApp(
         skip_boot=True,

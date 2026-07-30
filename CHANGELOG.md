@@ -3,6 +3,24 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.5] - 2026-07-30
+
+### Changed
+
+- Split the Textual composition root into focused boot, modal, agent, transcript,
+  operation, and built-in workspace modules while preserving existing imports.
+- Make a typed command catalog authoritative for command names, aliases, help,
+  routing, and completion behavior.
+- Replace large command and completion conditionals with small handler and rule
+  functions guarded by Ruff complexity checks.
+- Move normalized provider-event state transitions into a provider-neutral reducer.
+- Replace the built-in module's nine-argument constructor with a typed specification.
+- Normalize transcript, approval, and operation timestamps to timezone-aware UTC.
+- Update Module API compatibility defaults and generated module projects for the
+  supported Cyberdeck 0.3 release line.
+- Add public manager event-handler registration instead of mutating private state.
+- Enforce Ruff formatting and bounded complexity in CI.
+
 ## [0.3.4] - 2026-07-28
 
 ### Added
@@ -193,6 +211,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
 [0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
+[0.3.5]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.3...v0.3.4
 [0.2.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.1.0...v0.2.0

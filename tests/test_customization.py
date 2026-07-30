@@ -77,9 +77,7 @@ def test_config_validates_runtime_safety_values_and_workspace(tmp_path: Path) ->
 
 def test_config_rejects_unknown_density_without_affecting_boot(tmp_path: Path) -> None:
     store = ConfigStore(tmp_path / "config.toml")
-    store.path.write_text(
-        '[deck]\ndensity = "minimal"\nshow_boot = true\n', encoding="utf-8"
-    )
+    store.path.write_text('[deck]\ndensity = "minimal"\nshow_boot = true\n', encoding="utf-8")
 
     config = store.load()
 

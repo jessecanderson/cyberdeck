@@ -8,6 +8,11 @@ from typing import Any
 from uuid import UUID, uuid4
 
 
+def current_time() -> datetime:
+    """Return one canonical, timezone-aware timestamp for domain state."""
+    return datetime.now(UTC)
+
+
 @dataclass(frozen=True, slots=True)
 class AgentCapabilities:
     load_session: bool = False
@@ -66,7 +71,7 @@ class AgentConfig:
 class TranscriptEntry:
     role: str
     text: str
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=current_time)
     source_id: str | None = None
 
 
@@ -75,7 +80,7 @@ class PendingApproval:
     request_id: int | str
     method: str
     params: dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=current_time)
 
 
 @dataclass(slots=True)
@@ -83,7 +88,7 @@ class OperationEntry:
     kind: str
     summary: str
     state: OperationState = OperationState.RUNNING
-    created_at: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=current_time)
     id: str | None = None
     command: str | None = None
     cwd: str | None = None
@@ -142,15 +147,15 @@ class AgentState:
 
 def parse_timestamp(value: Any) -> datetime:
     if isinstance(value, datetime):
-        return value
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=UTC).astimezone()
+        return datetime.fromtimestamp(value, tz=UTC)
     if isinstance(value, str):
         try:
-            return datetime.fromisoformat(value).astimezone()
+            return parse_timestamp(datetime.fromisoformat(value))
         except ValueError:
             pass
-    return datetime.now().astimezone()
+    return current_time()
 
 
 def map_history_turns(turns: list[dict[str, Any]], next_cursor: str | None = None) -> HistoryPage:
@@ -164,7 +169,9 @@ def map_history_turns(turns: list[dict[str, Any]], next_cursor: str | None = Non
             created = parse_timestamp(item.get("createdAt") or fallback_time)
             if item_type == "userMessage":
                 text = item.get("text") or "".join(
-                    part.get("text", "") for part in item.get("content", []) if isinstance(part, dict)
+                    part.get("text", "")
+                    for part in item.get("content", [])
+                    if isinstance(part, dict)
                 )
                 page.transcript.append(
                     TranscriptEntry(
@@ -216,7 +223,7 @@ def operation_from_item(item: dict[str, Any], created_at: datetime | None = None
         kind=kind,
         summary=str(summary),
         state=state,
-        created_at=created_at or parse_timestamp(item.get("createdAt")),
+        created_at=parse_timestamp(created_at or item.get("createdAt")),
         id=str(item["id"]) if item.get("id") is not None else None,
         command=command,
         cwd=item.get("cwd"),

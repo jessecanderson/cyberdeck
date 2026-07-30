@@ -100,7 +100,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.4/cyberdeck_tui-0.3.4-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.5/cyberdeck_tui-0.3.5-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"

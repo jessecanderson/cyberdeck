@@ -40,8 +40,6 @@ def test_history_mapping_is_chronological_and_separates_operations() -> None:
 
 
 def test_unknown_history_items_are_ignored() -> None:
-    page = map_history_turns(
-        [{"createdAt": datetime.now(UTC), "items": [{"type": "futureThing"}]}]
-    )
+    page = map_history_turns([{"createdAt": datetime.now(UTC), "items": [{"type": "futureThing"}]}])
     assert page.transcript == []
     assert page.operations == []

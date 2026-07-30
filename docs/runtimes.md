@@ -19,7 +19,7 @@ visible transcript from replayed session updates. Disconnected Kiro sessions
 are not currently discoverable through the Codex-only Archive Uplink.
 
 Use `/runtimes` to refresh executable preflight and show detected versions.
-Cyberdeck 0.3.4 is exercised against the installed Codex CLI at test/run time
+Cyberdeck 0.3.5 is exercised against the installed Codex CLI at test/run time
 rather than promising compatibility with an unbounded App Server version.
 App Server requests have a 30-second response timeout; a stalled or closed
 transport becomes an actionable per-agent error and can be restored with
@@ -95,7 +95,7 @@ Context compaction is capability-gated as well. Codex uses
 with the `/compact` command. Generic ACP v1 runtimes are marked unavailable
 because ACP does not standardize context compaction. `/clear` remains a
 Cyberdeck display operation and never implies provider-side context deletion.
-Cyberdeck 0.3.4 intentionally does not offer a destructive provider-context
+Cyberdeck 0.3.5 intentionally does not offer a destructive provider-context
 reset command: starting a fresh provider session remains an explicit new-uplink
 operation. Successful compaction preserves the active agent identity and local
 transcript; failures leave the agent visibly recoverable instead of guessing a

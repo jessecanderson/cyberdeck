@@ -98,7 +98,9 @@ class ConfigStore:
         workspace = agents.get("workspace_root")
         workspace_root = Path(str(workspace)).expanduser() if workspace else None
         if workspace_root is not None and not workspace_root.is_dir():
-            self.errors.append(f"Invalid workspace_root '{workspace_root}'; using current directory")
+            self.errors.append(
+                f"Invalid workspace_root '{workspace_root}'; using current directory"
+            )
             workspace_root = None
         boot = data.get("deck", {}).get("show_boot", True)
         if not isinstance(boot, bool):
@@ -112,9 +114,7 @@ class ConfigStore:
             active_theme=str(data.get("deck", {}).get("theme", "ods")),
             active_module=str(data.get("deck", {}).get("module", "agents")),
             journal_directory=Path(configured).expanduser() if configured else None,
-            default_runtime=str(
-                agents.get("default_runtime", "codex")
-            ).casefold(),
+            default_runtime=str(agents.get("default_runtime", "codex")).casefold(),
             runtimes=tuple(runtimes),
             workspace_root=workspace_root,
             approval_policy=approval_policy,
@@ -142,9 +142,7 @@ class ConfigStore:
         )
         for runtime in config.runtimes:
             command = ", ".join(f'"{_escape(part)}"' for part in runtime.command)
-            environment = ", ".join(
-                f'"{_escape(name)}"' for name in runtime.environment_allowlist
-            )
+            environment = ", ".join(f'"{_escape(name)}"' for name in runtime.environment_allowlist)
             content += (
                 "\n[[runtimes]]\n"
                 f'id = "{_escape(runtime.id)}"\n'

@@ -306,17 +306,13 @@ class CodexAppServerAdapter:
                     request_id = message["id"]
                     future = self._pending.get(request_id)
                     if not future or future.done():
-                        raise CodexProtocolError(
-                            f"response for unknown request id: {request_id}"
-                        )
+                        raise CodexProtocolError(f"response for unknown request id: {request_id}")
                     if "error" in message:
                         future.set_exception(CodexProtocolError(str(message["error"])))
                     else:
                         result = message.get("result")
                         if not isinstance(result, dict):
-                            raise CodexProtocolError(
-                                f"invalid result for request id: {request_id}"
-                            )
+                            raise CodexProtocolError(f"invalid result for request id: {request_id}")
                         future.set_result(result)
                     continue
                 if "id" in message and "method" in message:
