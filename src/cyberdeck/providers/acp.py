@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import shutil
 import signal
@@ -13,6 +12,7 @@ from typing import Any
 from .. import __version__
 from ..domain import AgentCapabilities, HistoryPage
 from .base import AgentEvent
+from .jsonline import cancel_pending, cancel_tasks, decode_message, encode_message, fail_pending
 
 ACP_STREAM_LIMIT = 16 * 1024 * 1024
 
@@ -239,12 +239,8 @@ class AcpAgentAdapter:
             except TimeoutError:
                 self._signal_process(process, getattr(signal, "SIGKILL", signal.SIGTERM))
                 await process.wait()
-        for task in (self._reader_task, self._stderr_task):
-            if task:
-                task.cancel()
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
+        cancel_tasks(self._reader_task, self._stderr_task)
+        cancel_pending(self._pending)
         self._permission_options.clear()
         await self._events.put(None)
 
@@ -270,9 +266,7 @@ class AcpAgentAdapter:
         self._next_id += 1
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self._write(
-            {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-        )
+        await self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         try:
             return await future
         finally:
@@ -284,19 +278,14 @@ class AcpAgentAdapter:
     async def _write(self, message: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin:
             raise AcpProtocolError("ACP agent process is not running")
-        self.process.stdin.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+        self.process.stdin.write(encode_message(message))
         await self.process.stdin.drain()
 
     async def _read_stdout(self) -> None:
         assert self.process and self.process.stdout
         try:
             while line := await self.process.stdout.readline():
-                try:
-                    message = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError) as exc:
-                    raise AcpProtocolError(f"Malformed ACP message: {exc}") from exc
-                if not isinstance(message, dict):
-                    raise AcpProtocolError("ACP message must be a JSON object")
+                message = decode_message(line, protocol="ACP", error_type=AcpProtocolError)
                 if "id" in message and ("result" in message or "error" in message):
                     self._handle_response(message)
                 elif "id" in message and "method" in message:
@@ -419,9 +408,7 @@ class AcpAgentAdapter:
             return
         self._transport_failure_reported = True
         error = AcpProtocolError(reason)
-        for future in self._pending.values():
-            if not future.done():
-                future.set_exception(error)
+        fail_pending(self._pending, error)
         self._permission_options.clear()
         await self._events.put(AgentEvent("transport_closed", reason))
 

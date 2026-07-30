@@ -38,13 +38,24 @@ class FakeAdapter:
         if self.fail_send:
             raise RuntimeError("radio failure")
 
-    async def set_thread_name(self, thread_id, name): self.names.append((thread_id, name))
-    async def interrupt_turn(self): pass
-    async def compact_context(self): self.compacted = True
-    async def archive_thread(self): pass
+    async def set_thread_name(self, thread_id, name):
+        self.names.append((thread_id, name))
+
+    async def interrupt_turn(self):
+        pass
+
+    async def compact_context(self):
+        self.compacted = True
+
+    async def archive_thread(self):
+        pass
+
     async def respond_approval(self, request_id, decision):
         self.approvals.append((request_id, decision))
-    async def stop(self): self.stopped = True
+
+    async def stop(self):
+        self.stopped = True
+
     async def resume_thread(self, thread_id, cwd):
         self.thread_id = thread_id
         return HistoryPage()
@@ -54,12 +65,25 @@ def manager() -> AgentManager:
     return AgentManager(lambda state, event: None, adapter_factory=FakeAdapter)
 
 
+def test_adapter_binding_is_public_and_validates_registration() -> None:
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    adapter = FakeAdapter()
+
+    deck.attach_adapter(state, adapter)
+
+    assert deck.adapter_for(state) is adapter
+    foreign = manager().register("foreign", Path("/tmp"))
+    with pytest.raises(ValueError, match="unregistered"):
+        deck.attach_adapter(foreign, FakeAdapter())
+
+
 @pytest.mark.asyncio
 async def test_compact_context_uses_provider_and_returns_agent_ready() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = FakeAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
     state.capabilities = adapter.capabilities
     state.context_tokens = 42_000
     state.thread_id = "durable-thread"
@@ -84,7 +108,7 @@ async def test_compact_context_failure_is_visible_and_recoverable() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = FailingCompactAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
     state.capabilities = adapter.capabilities
 
     with pytest.raises(RuntimeError, match="provider rejected"):
@@ -100,7 +124,7 @@ async def test_compact_context_rejects_busy_or_unsupported_agent() -> None:
     deck = manager()
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.PROCESSING)
     state.capabilities = AgentCapabilities(context_compaction=True)
-    deck._adapters[str(state.config.id)] = FakeAdapter()
+    deck.attach_adapter(state, FakeAdapter())
 
     with pytest.raises(ValueError, match="wait for READY"):
         await deck.compact_context(state)
@@ -128,7 +152,7 @@ async def test_send_announces_user_message_before_provider_finishes() -> None:
     )
     state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
     adapter = DelayedAdapter()
-    deck._adapters[str(state.config.id)] = adapter
+    deck.attach_adapter(state, adapter)
 
     send_task = asyncio.create_task(deck.send(state, "scan grid"))
     await asyncio.sleep(0)
@@ -164,10 +188,12 @@ async def test_connect_uses_registered_provider_factory() -> None:
 async def test_respond_all_approvals_preserves_each_request_identity() -> None:
     deck = manager()
     state, adapter = attach(deck, "ghost")
-    state.pending_approvals.extend([
-        PendingApproval("permission-7", "session/request_permission", {"options": []}),
-        PendingApproval("permission-8", "session/request_permission", {"options": []}),
-    ])
+    state.pending_approvals.extend(
+        [
+            PendingApproval("permission-7", "session/request_permission", {"options": []}),
+            PendingApproval("permission-8", "session/request_permission", {"options": []}),
+        ]
+    )
 
     results = await deck.respond_all_approvals(state)
 
@@ -185,13 +211,15 @@ def attach(manager, name):
     adapter = FakeAdapter()
     adapter.thread_id = state.thread_id
     state.capabilities = adapter.capabilities
-    manager._adapters[str(state.config.id)] = adapter
+    manager.attach_adapter(state, adapter)
     return state, adapter
 
 
 @pytest.mark.asyncio
 async def test_rename_is_case_insensitively_unique_and_rolls_back() -> None:
-    deck = manager(); ghost, adapter = attach(deck, "Ghost"); attach(deck, "Cipher")
+    deck = manager()
+    ghost, adapter = attach(deck, "Ghost")
+    attach(deck, "Cipher")
     with pytest.raises(ValueError, match="already in use"):
         await deck.rename(ghost, "cipher")
     assert ghost.config.name == "Ghost"
@@ -200,7 +228,8 @@ async def test_rename_is_case_insensitively_unique_and_rolls_back() -> None:
 
 @pytest.mark.asyncio
 async def test_disconnect_stops_and_removes_without_archiving() -> None:
-    deck = manager(); state, adapter = attach(deck, "ghost")
+    deck = manager()
+    state, adapter = attach(deck, "ghost")
     await deck.disconnect(state)
     assert state not in deck.agents
     assert state.status is AgentStatus.STOPPED
@@ -209,7 +238,8 @@ async def test_disconnect_stops_and_removes_without_archiving() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_resumes_same_thread_and_becomes_ready() -> None:
-    deck = manager(); state, old = attach(deck, "ghost")
+    deck = manager()
+    state, old = attach(deck, "ghost")
     state.status = AgentStatus.ERROR
     await deck.retry(state)
     assert old.stopped
@@ -280,7 +310,9 @@ async def test_dispatch_preserves_mixed_runtime_identity() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_partial_failure_marks_only_failed_target() -> None:
-    deck = manager(); first, _ = attach(deck, "one"); second, failed = attach(deck, "two")
+    deck = manager()
+    first, _ = attach(deck, "one")
+    second, failed = attach(deck, "two")
     failed.fail_send = True
     result = await deck.dispatch([first, second], "scan")
     assert result == {"one": None, "two": "radio failure"}
@@ -292,7 +324,9 @@ async def test_dispatch_partial_failure_marks_only_failed_target() -> None:
 
 @pytest.mark.asyncio
 async def test_dispatch_rejects_busy_target_before_any_send() -> None:
-    deck = manager(); first, _ = attach(deck, "one"); second, _ = attach(deck, "two")
+    deck = manager()
+    first, _ = attach(deck, "one")
+    second, _ = attach(deck, "two")
     second.status = AgentStatus.EXECUTING
     with pytest.raises(ValueError, match=r"two \(EXECUTING\)"):
         await deck.dispatch([first, second], "scan")
@@ -301,7 +335,8 @@ async def test_dispatch_rejects_busy_target_before_any_send() -> None:
 
 @pytest.mark.asyncio
 async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> None:
-    deck = manager(); state, adapter = attach(deck, "ghost")
+    deck = manager()
+    state, adapter = attach(deck, "ghost")
     adapter.fail_send = True
 
     with pytest.raises(RuntimeError, match="radio failure"):
@@ -315,13 +350,16 @@ async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> N
 
 @pytest.mark.asyncio
 async def test_approval_is_owned_by_agent_until_answered() -> None:
-    deck = manager(); state, adapter = attach(deck, "ghost")
-    adapter.queue.append(AgentEvent(
-        "approval",
-        request_id=42,
-        method="item/fileChange/requestApproval",
-        params={"grantRoot": "/tmp"},
-    ))
+    deck = manager()
+    state, adapter = attach(deck, "ghost")
+    adapter.queue.append(
+        AgentEvent(
+            "approval",
+            request_id=42,
+            method="item/fileChange/requestApproval",
+            params={"grantRoot": "/tmp"},
+        )
+    )
     await deck._pump(state, adapter)
     assert state.status is AgentStatus.FIREWALL_HOLD
     assert state.current_activity == "ICE authorization required"
@@ -335,7 +373,8 @@ async def test_approval_is_owned_by_agent_until_answered() -> None:
 
 @pytest.mark.asyncio
 async def test_distinct_agent_message_ids_create_distinct_transcript_entries() -> None:
-    deck = manager(); state, adapter = attach(deck, "ghost")
+    deck = manager()
+    state, adapter = attach(deck, "ghost")
     adapter.queue.extend(
         [
             AgentEvent("assistant_delta", "I will review it.", message_id="message-1"),
@@ -354,13 +393,16 @@ async def test_distinct_agent_message_ids_create_distinct_transcript_entries() -
 
 @pytest.mark.asyncio
 async def test_acp_replay_roles_reconstruct_transcript_boundaries() -> None:
-    deck = manager(); state, adapter = attach(deck, "wintermute")
-    adapter.queue.extend([
-        AgentEvent("user_replay", "First prompt"),
-        AgentEvent("assistant_delta", "First response"),
-        AgentEvent("user_replay", "Second prompt"),
-        AgentEvent("assistant_delta", "Second response"),
-    ])
+    deck = manager()
+    state, adapter = attach(deck, "wintermute")
+    adapter.queue.extend(
+        [
+            AgentEvent("user_replay", "First prompt"),
+            AgentEvent("assistant_delta", "First response"),
+            AgentEvent("user_replay", "Second prompt"),
+            AgentEvent("assistant_delta", "Second response"),
+        ]
+    )
 
     await deck._pump(state, adapter)
 

@@ -65,6 +65,13 @@ cyberdeck --version
 cyberdeck
 ```
 
+The standalone bundle contains Cyberdeck's application files and a private embedded
+Python runtime because Cyberdeck still needs an interpreter to run. It does not create
+a virtual environment, install or link a Homebrew Python, or alter the machine's
+`python` and `python3` commands. Homebrew creates only the normal `cyberdeck` command
+symlink into its Cellar, and uninstalling the formula removes the bundled runtime with
+the rest of Cyberdeck.
+
 Upgrade, reinstall, or remove it with:
 
 ```bash
@@ -82,10 +89,6 @@ brew update
 brew reinstall jessecanderson/tap/cyberdeck
 ```
 
-The cask variant is also available for Apple Silicon, but the formula is the
-preferred command-line installation because it avoids macOS application
-quarantine handling.
-
 ### Managed macOS or existing Python runtime
 
 If your Mac blocks downloaded runtimes with Gatekeeper, use a trusted Python
@@ -100,7 +103,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.4/cyberdeck_tui-0.3.4-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.5/cyberdeck_tui-0.3.5-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"
@@ -163,6 +166,8 @@ threads can be searched, multi-selected, and restored. `Ctrl+J` and `Ctrl+K`
 cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix, and
 `/switch CALLSIGN` jumps directly to a named uplink. Unsent
 drafts follow their agent, and Up/Down recalls process-local prompt history.
+Press `Ctrl+U` to discard the current unsent prompt or command without changing the
+transcript or provider context.
 
 `Ctrl+G` opens Operative Control for rename, interrupt, retry, disconnect, and
 archive actions. Disconnect is reversible through Archive Uplink. `Ctrl+B`

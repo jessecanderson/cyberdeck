@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+python_bin="$project_root/.venv/bin/python"
+
+if [ ! -x "$python_bin" ]; then
+    echo "Cyberdeck development environment is missing." >&2
+    echo "Create it with: python3 -m venv .venv" >&2
+    echo "Then install tools with: .venv/bin/python -m pip install -e '.[dev]'" >&2
+    exit 1
+fi
+
+export PYTHONPATH="$project_root/src${PYTHONPATH:+:$PYTHONPATH}"
+exec "$python_bin" -m cyberdeck.app "$@"

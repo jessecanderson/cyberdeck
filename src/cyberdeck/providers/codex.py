@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
@@ -15,6 +14,7 @@ from ..domain import (
     parse_timestamp,
 )
 from .base import AgentEvent
+from .jsonline import cancel_pending, cancel_tasks, decode_message, encode_message, fail_pending
 
 # JSON-RPC messages are newline-delimited and can contain large tool or agent payloads.
 # asyncio's 64 KiB default causes readline() to fail before JSON decoding.
@@ -249,14 +249,10 @@ class CodexAppServerAdapter:
             except TimeoutError:
                 process.kill()
                 await process.wait()
-        for task in (self._reader_task, self._stderr_task):
-            if task:
-                task.cancel()
+        cancel_tasks(self._reader_task, self._stderr_task)
         if self._compaction_done and not self._compaction_done.done():
             self._compaction_done.cancel()
-        for future in self._pending.values():
-            if not future.done():
-                future.cancel()
+        cancel_pending(self._pending)
         await self._events.put(None)
 
     async def respond_approval(self, request_id: int | str, decision: str) -> None:
@@ -292,31 +288,25 @@ class CodexAppServerAdapter:
     async def _write(self, message: dict[str, Any]) -> None:
         if not self.process or not self.process.stdin:
             raise CodexProtocolError("Codex app-server is not running")
-        self.process.stdin.write(json.dumps(message, separators=(",", ":")).encode() + b"\n")
+        self.process.stdin.write(encode_message(message))
         await self.process.stdin.drain()
 
     async def _read_stdout(self) -> None:
         assert self.process and self.process.stdout
         try:
             while line := await self.process.stdout.readline():
-                message = json.loads(line)
-                if not isinstance(message, dict):
-                    raise CodexProtocolError("Codex message must be a JSON object")
+                message = decode_message(line, protocol="Codex", error_type=CodexProtocolError)
                 if "id" in message and ("result" in message or "error" in message):
                     request_id = message["id"]
                     future = self._pending.get(request_id)
                     if not future or future.done():
-                        raise CodexProtocolError(
-                            f"response for unknown request id: {request_id}"
-                        )
+                        raise CodexProtocolError(f"response for unknown request id: {request_id}")
                     if "error" in message:
                         future.set_exception(CodexProtocolError(str(message["error"])))
                     else:
                         result = message.get("result")
                         if not isinstance(result, dict):
-                            raise CodexProtocolError(
-                                f"invalid result for request id: {request_id}"
-                            )
+                            raise CodexProtocolError(f"invalid result for request id: {request_id}")
                         future.set_result(result)
                     continue
                 if "id" in message and "method" in message:
@@ -350,9 +340,7 @@ class CodexAppServerAdapter:
             return
         self._transport_failure_reported = True
         error = CodexProtocolError(reason)
-        for future in self._pending.values():
-            if not future.done():
-                future.set_exception(error)
+        fail_pending(self._pending, error)
         if self._compaction_done and not self._compaction_done.done():
             self._compaction_done.set_exception(error)
         await self._events.put(AgentEvent("transport_closed", reason))

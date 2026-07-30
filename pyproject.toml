@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cyberdeck-tui"
-version = "0.3.4"
+version = "0.3.5"
 description = "A neon multi-agent terminal interface for local coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -62,3 +62,14 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+extend-select = ["C901", "PLR0912", "PLR0913", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 15
+
+[tool.ruff.lint.pylint]
+max-args = 6
+max-branches = 20
+max-statements = 60

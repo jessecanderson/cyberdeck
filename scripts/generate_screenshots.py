@@ -38,9 +38,7 @@ async def generate() -> None:
     )
     ghost.operations.extend(
         [
-            OperationEntry(
-                "commandExecution", "python -m pytest -q", OperationState.SUCCEEDED
-            ),
+            OperationEntry("commandExecution", "python -m pytest -q", OperationState.SUCCEEDED),
             OperationEntry("fileChange", ".github/workflows/ci.yml", OperationState.SUCCEEDED),
         ]
     )

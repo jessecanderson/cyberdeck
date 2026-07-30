@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Protocol, runtime_checkable
 
 from textual.widget import Widget
 
@@ -29,7 +29,7 @@ class ModuleManifest:
     order: int = 100
     version: str = "0.0.0"
     api_version: int = CYBERDECK_MODULE_API
-    requires_cyberdeck: str = ">=0.1,<0.3"
+    requires_cyberdeck: str = ">=0.3,<0.4"
     author: str = "Unknown"
     source: str = "bundled"
     capabilities: tuple[str, ...] = ()
@@ -42,6 +42,13 @@ class ModuleStatus(str, Enum):
     UPDATE_PENDING = "update_pending"
 
 
+@runtime_checkable
+class ModuleService(Protocol):
+    """Marker contract for named, versionable services exposed to modules."""
+
+    service_id: str
+
+
 @dataclass(frozen=True, slots=True)
 class ModuleContext:
     """Stable services available to a trusted in-process module."""
@@ -51,7 +58,7 @@ class ModuleContext:
     config_directory: Path
     notify: Callable[[str, str, str], None]
     copy_to_clipboard: Callable[[str], None]
-    services: dict[str, Any]
+    services: Mapping[str, ModuleService]
 
 
 @dataclass(frozen=True, slots=True)
@@ -99,8 +106,7 @@ def validate_manifest(manifest: ModuleManifest) -> None:
         raise ValueError("The module id 'agents' is reserved")
     if manifest.api_version != CYBERDECK_MODULE_API:
         raise ValueError(
-            f"Module API {manifest.api_version} is incompatible with API "
-            f"{CYBERDECK_MODULE_API}"
+            f"Module API {manifest.api_version} is incompatible with API {CYBERDECK_MODULE_API}"
         )
     if not manifest.title.strip() or not manifest.description.strip():
         raise ValueError("Module title and description are required")

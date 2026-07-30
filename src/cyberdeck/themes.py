@@ -54,10 +54,17 @@ ODS_THEME = DeckTheme(
     "ODS Nightwave",
     "Open Deck Systems",
     colors={
-        "primary": "#00e8f2", "secondary": "#e62acb", "accent": "#e62acb",
-        "success": "#52e891", "warning": "#e9b949", "error": "#ff3b4f",
-        "foreground": "#cce7ed", "background": "#03050a", "surface": "#070c14",
-        "panel": "#0a1220", "muted": "#607087",
+        "primary": "#00e8f2",
+        "secondary": "#e62acb",
+        "accent": "#e62acb",
+        "success": "#52e891",
+        "warning": "#e9b949",
+        "error": "#ff3b4f",
+        "foreground": "#cce7ed",
+        "background": "#03050a",
+        "surface": "#070c14",
+        "panel": "#0a1220",
+        "muted": "#607087",
     },
     styles={"heading": "bold", "muted": "dim"},
 )
@@ -119,7 +126,9 @@ def discover_themes(directory: Path | None = None) -> tuple[dict[str, DeckTheme]
     return themes, errors
 
 
-def import_theme(source: Path, directory: Path | None = None, *, replace: bool = False) -> DeckTheme:
+def import_theme(
+    source: Path, directory: Path | None = None, *, replace: bool = False
+) -> DeckTheme:
     theme = load_theme(source)
     root = directory or user_theme_directory()
     target = root / f"{theme.id}.toml"

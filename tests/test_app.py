@@ -58,11 +58,26 @@ async def test_app_mounts() -> None:
         assert "LOCAL GRID 00/00" in str(pilot.app.query_one("#uplink-count").content)
         assert "NO ACTIVE CONSTRUCT" in str(pilot.app.query_one("#agent-name").content)
         assert "STATE OFFLINE" in str(pilot.app.query_one("#agent-state").content)
-        assert pilot.app.query_one("#sidebar-title").size.width == pilot.app.query_one("#sidebar").content_size.width
+        assert (
+            pilot.app.query_one("#sidebar-title").size.width
+            == pilot.app.query_one("#sidebar").content_size.width
+        )
         assert "接続" in str(pilot.app.query_one("#sidebar-title").content)
         assert "LOCAL GRID" in str(pilot.app.query_one("#sidebar-title").content)
         assert "MODULE BAY" in str(pilot.app.query_one("#modules-title").content)
         assert "電脳端末" in str(pilot.app.query_one("#deck-brand").content)
+
+
+@pytest.mark.asyncio
+async def test_public_application_test_seams_present_agents_and_run_commands() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+
+        await pilot.app.present_agent(state)
+        await pilot.app.execute_command("/path")
+
+        assert pilot.app.active_agent() is state
+        assert state.transcript[-1].text == str(Path("/tmp").resolve())
 
 
 def test_agent_label_exposes_real_local_provider_topology() -> None:
@@ -86,9 +101,7 @@ def test_agent_label_exposes_real_local_provider_topology() -> None:
         (AgentStatus.READY, 3, "ECHO +3"),
     ],
 )
-def test_agent_label_surfaces_attention(
-    status: AgentStatus, unread: int, attention: str
-) -> None:
+def test_agent_label_surfaces_attention(status: AgentStatus, unread: int, attention: str) -> None:
     app = CyberdeckApp(skip_boot=True)
     state = AgentState(
         AgentConfig("ghost", Path("/tmp")),
@@ -145,7 +158,9 @@ async def test_help_screen_is_generated_from_every_registered_command() -> None:
 @pytest.mark.asyncio
 async def test_about_reports_version_and_copies_safe_manifest(monkeypatch) -> None:
     copied: list[str] = []
-    monkeypatch.setattr(CyberdeckApp, "_executable_version", staticmethod(lambda _name: "codex 1.2.3"))
+    monkeypatch.setattr(
+        CyberdeckApp, "_executable_version", staticmethod(lambda _name: "codex 1.2.3")
+    )
     async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         await pilot.app._run_local_command("/about")
         await pilot.pause()
@@ -163,7 +178,9 @@ async def test_boot_screen_is_shown(tmp_path: Path) -> None:
     registry = ModuleRegistry(tmp_path / "modules", tmp_path / "module-config")
     async with CyberdeckApp(module_registry=registry).run_test() as pilot:
         await pilot.pause()
-        assert pilot.app.screen.id is not None or pilot.app.screen.__class__.__name__ == "BootScreen"
+        assert (
+            pilot.app.screen.id is not None or pilot.app.screen.__class__.__name__ == "BootScreen"
+        )
         await pilot.press("enter")
 
 
@@ -178,9 +195,7 @@ def test_boot_contains_fictional_japanese_extension_module() -> None:
 
 def test_boot_lines_clip_to_terminal_cells_without_wrapping() -> None:
     width = 32
-    japanese = next(
-        line for line, _style, _delay in BootScreen.BOOT_LINES if "零界技研" in line
-    )
+    japanese = next(line for line, _style, _delay in BootScreen.BOOT_LINES if "零界技研" in line)
     clipped = chop_cells(japanese, width)[0]
     assert cell_len(clipped) <= width
     assert width - cell_len(clipped) >= 0
@@ -227,9 +242,7 @@ async def test_spawn_agent_refuses_unavailable_runtime() -> None:
         await pilot.pause()
 
         assert isinstance(pilot.app.screen, SpawnAgent)
-        assert "RUNTIME UNAVAILABLE" in str(
-            pilot.app.screen.query_one("#spawn-help").content
-        )
+        assert "RUNTIME UNAVAILABLE" in str(pilot.app.screen.query_one("#spawn-help").content)
 
 
 def test_new_command_autocompletes_agent_runtimes() -> None:
@@ -245,12 +258,8 @@ def test_new_command_autocompletes_agent_runtimes() -> None:
         ("codex", "agent runtime"),
         ("kiro", "agent runtime"),
     ]
-    assert app._complete("/approve a") == [
-        ("all", "approve every pending ICE request once")
-    ]
-    assert app._complete("/tr") == [
-        ("/trust", "trust the latest ICE request for this session")
-    ]
+    assert app._complete("/approve a") == [("all", "approve every pending ICE request once")]
+    assert app._complete("/tr") == [("/trust", "trust the latest ICE request for this session")]
     assert app._complete("/de") == [
         ("/deny", "deny the latest ICE request"),
         ("/density", "show or set workspace density: standard|compact"),
@@ -295,11 +304,13 @@ async def test_new_command_routes_explicit_provider_to_spawn(monkeypatch) -> Non
 async def test_approval_request_renders_inline_without_blocking_other_agents() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD)
-        state.pending_approvals.append(PendingApproval(
-            7,
-            "item/commandExecution/requestApproval",
-            {"command": "npm install", "cwd": "/tmp", "reason": "network access"},
-        ))
+        state.pending_approvals.append(
+            PendingApproval(
+                7,
+                "item/commandExecution/requestApproval",
+                {"command": "npm install", "cwd": "/tmp", "reason": "network access"},
+            )
+        )
         await pilot.app._add_agent_item(state, select=True)
         pilot.app._render_active()
         await pilot.pause()
@@ -316,20 +327,21 @@ async def test_overflowing_transcript_reveals_and_scrolls_focused_approval() -> 
             "wintermute", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
         )
         state.transcript.extend(
-            TranscriptEntry("assistant", f"Historical response {index}")
-            for index in range(30)
+            TranscriptEntry("assistant", f"Historical response {index}") for index in range(30)
         )
-        state.pending_approvals.append(PendingApproval(
-            "permission-7",
-            "session/request_permission",
-            {
-                "toolCall": {"title": "run validation"},
-                "options": [
-                    {"optionId": "yes", "name": "Allow", "kind": "allow_once"},
-                    {"optionId": "no", "name": "Reject", "kind": "reject_once"},
-                ],
-            },
-        ))
+        state.pending_approvals.append(
+            PendingApproval(
+                "permission-7",
+                "session/request_permission",
+                {
+                    "toolCall": {"title": "run validation"},
+                    "options": [
+                        {"optionId": "yes", "name": "Allow", "kind": "allow_once"},
+                        {"optionId": "no", "name": "Reject", "kind": "reject_once"},
+                    ],
+                },
+            )
+        )
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
 
@@ -369,15 +381,15 @@ async def test_approve_all_requires_confirmation_and_resolves_batch() -> None:
             pass
 
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
-        state = pilot.app.manager.register(
-            "ghost", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD)
+        state.pending_approvals.extend(
+            [
+                PendingApproval("permission-7", "session/request_permission", {"options": []}),
+                PendingApproval("permission-8", "session/request_permission", {"options": []}),
+            ]
         )
-        state.pending_approvals.extend([
-            PendingApproval("permission-7", "session/request_permission", {"options": []}),
-            PendingApproval("permission-8", "session/request_permission", {"options": []}),
-        ])
         adapter = ApprovalAdapter()
-        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        pilot.app.manager.attach_adapter(state, adapter)
         await pilot.app._add_agent_item(state, select=True)
 
         await pilot.app._run_local_command("/approve all")
@@ -408,13 +420,15 @@ async def test_ice_card_keeps_prompt_typing_and_accepts_slash_decision() -> None
         state = pilot.app.manager.register(
             "wintermute", Path("/tmp"), status=AgentStatus.FIREWALL_HOLD
         )
-        state.pending_approvals.append(PendingApproval(
-            "permission-9",
-            "session/request_permission",
-            {"options": []},
-        ))
+        state.pending_approvals.append(
+            PendingApproval(
+                "permission-9",
+                "session/request_permission",
+                {"options": []},
+            )
+        )
         adapter = ApprovalAdapter()
-        pilot.app.manager._adapters[str(state.config.id)] = adapter
+        pilot.app.manager.attach_adapter(state, adapter)
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
         pilot.app.query_one("#prompt").focus()
@@ -455,7 +469,7 @@ async def test_prompt_accepts_draft_while_acp_turn_remains_open() -> None:
         state = pilot.app.manager.register(
             "wintermute", Path("/tmp"), provider="kiro", status=AgentStatus.READY
         )
-        pilot.app.manager._adapters[str(state.config.id)] = DelayedAdapter()
+        pilot.app.manager.attach_adapter(state, DelayedAdapter())
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
 
@@ -668,9 +682,20 @@ async def test_prompt_history_restores_newest_draft() -> None:
 def test_lifecycle_and_dispatch_commands_are_autocompletable() -> None:
     app = CyberdeckApp(skip_boot=True)
     expected = {
-        "/agent", "/rename", "/interrupt", "/retry", "/disconnect",
-        "/archive", "/dispatch", "/copy", "/send", "/pipe", "/kill",
-        "/approve", "/trust", "/deny",
+        "/agent",
+        "/rename",
+        "/interrupt",
+        "/retry",
+        "/disconnect",
+        "/archive",
+        "/dispatch",
+        "/copy",
+        "/send",
+        "/pipe",
+        "/kill",
+        "/approve",
+        "/trust",
+        "/deny",
         "/runtimes",
     }
     assert expected <= set(app.LOCAL_COMMANDS)
@@ -718,9 +743,7 @@ async def test_density_autocomplete_advances_to_and_accepts_mode() -> None:
 
 def test_density_argument_completion_filters_prefix_and_stops_when_complete() -> None:
     app = CyberdeckApp(skip_boot=True)
-    assert app._complete("/density c") == [
-        ("compact", "use compact workspace presentation")
-    ]
+    assert app._complete("/density c") == [("compact", "use compact workspace presentation")]
     assert app._complete("/density compact") == []
 
 
@@ -766,7 +789,105 @@ def test_agent_commands_complete_callsigns_and_kill_all() -> None:
     assert app._complete("/send gh") == [("Ghost", "ready agent")]
     assert app._complete("/pipe ci") == [("Cipher", "ready agent")]
     assert ("all", "all connected agents") in app._complete("/kill a")
+    assert app._complete("/kill ghost") == []
     assert app._complete("/switch gh") == [("Ghost", "ready agent")]
+
+
+@pytest.mark.asyncio
+async def test_pipe_combines_latest_output_with_operator_instruction() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        source = pilot.app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+        target = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        source.transcript.append(TranscriptEntry("assistant", "Implementation summary"))
+        await pilot.app.present_agent(source)
+        await pilot.app.present_agent(target, select=False)
+        transmissions: list[tuple[AgentState, str, str]] = []
+        pilot.app._send_to_agent = lambda agent, payload, verb: transmissions.append(
+            (agent, payload, verb)
+        )
+
+        pilot.app._route_command("/pipe", ["Ghost", "Review", "this", "for", "risks"])
+
+        assert transmissions == [
+            (
+                target,
+                "Implementation summary\n\n---\nOPERATOR INSTRUCTION:\nReview this for risks",
+                "pipe",
+            )
+        ]
+
+
+@pytest.mark.asyncio
+async def test_pipe_without_instruction_preserves_latest_output_payload() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        source = pilot.app.manager.register("Cipher", Path("/tmp"), status=AgentStatus.READY)
+        target = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        source.transcript.append(TranscriptEntry("assistant", "Implementation summary"))
+        await pilot.app.present_agent(source)
+        await pilot.app.present_agent(target, select=False)
+        transmissions: list[tuple[AgentState, str, str]] = []
+        pilot.app._send_to_agent = lambda agent, payload, verb: transmissions.append(
+            (agent, payload, verb)
+        )
+
+        pilot.app._route_command("/pipe", ["Ghost"])
+
+        assert transmissions == [(target, "Implementation summary", "pipe")]
+
+
+@pytest.mark.asyncio
+async def test_enter_submits_kill_with_exact_autocompleted_callsign() -> None:
+    submitted: list[str] = []
+
+    async def record_command(command_line: str) -> None:
+        submitted.append(command_line)
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.execute_command = record_command
+        pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        prompt = pilot.app.query_one("#prompt", Input)
+        prompt.focus()
+        prompt.value = "/kill gh"
+        await pilot.pause()
+
+        assert prompt.has_focus
+        assert pilot.app._prompt_completions == [("Ghost", "ready agent")]
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert prompt.value == "/kill Ghost"
+        assert pilot.app._prompt_completions == []
+        assert submitted == []
+
+        await pilot.press("enter")
+        await pilot.pause(0.1)
+
+        assert prompt.value == ""
+        assert submitted == ["/kill Ghost"]
+
+
+@pytest.mark.asyncio
+async def test_ctrl_u_clears_prompt_completion_history_navigation_and_agent_draft() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app.present_agent(state)
+        prompt = pilot.app.query_one("#prompt", Input)
+        prompt.focus()
+        prompt.value = "/kill gh"
+        state.prompt_draft = "/kill gh"
+        pilot.app._history_index = 0
+        pilot.app._history_draft = "remember me"
+        await pilot.pause()
+
+        assert pilot.app._prompt_completions == [("Ghost", "ready agent")]
+        await pilot.press("ctrl+u")
+        await pilot.pause()
+
+        assert prompt.value == ""
+        assert pilot.app._prompt_completions == []
+        assert pilot.app._history_index is None
+        assert pilot.app._history_draft == ""
+        assert state.prompt_draft == ""
 
 
 @pytest.mark.asyncio
@@ -860,11 +981,13 @@ async def test_whole_message_selection_copies_verbatim_and_cancel_is_non_mutatin
     copied: list[str] = []
     async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
-        state.transcript.extend([
-            TranscriptEntry("user", "first\nline"),
-            TranscriptEntry("assistant", "second"),
-            TranscriptEntry("system", "third"),
-        ])
+        state.transcript.extend(
+            [
+                TranscriptEntry("user", "first\nline"),
+                TranscriptEntry("assistant", "second"),
+                TranscriptEntry("system", "third"),
+            ]
+        )
         original = list(state.transcript)
         await pilot.app._add_agent_item(state, select=True)
 
@@ -886,9 +1009,9 @@ async def test_whole_message_selection_copies_verbatim_and_cancel_is_non_mutatin
 @pytest.mark.asyncio
 async def test_selection_scrolls_and_preserves_markdown_code_text() -> None:
     copied: list[str] = []
-    async with CyberdeckApp(
-        skip_boot=True, clipboard_writer=copied.append
-    ).run_test(size=(80, 24)) as pilot:
+    async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test(
+        size=(80, 24)
+    ) as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
         state.transcript.extend(
             TranscriptEntry("assistant", f"message {index}") for index in range(20)
@@ -922,6 +1045,7 @@ async def test_selection_reports_clipboard_failure() -> None:
 
         assert "CLIPBOARD FAULT" in state.transcript[-1].text
 
+
 @pytest.mark.asyncio
 async def test_agent_label_refresh_uses_stable_row_identity() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
@@ -943,11 +1067,13 @@ async def test_copy_defaults_to_latest_assistant_response() -> None:
     copied: list[str] = []
     async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
-        state.transcript.extend([
-            TranscriptEntry("assistant", "first"),
-            TranscriptEntry("user", "next"),
-            TranscriptEntry("assistant", "latest"),
-        ])
+        state.transcript.extend(
+            [
+                TranscriptEntry("assistant", "first"),
+                TranscriptEntry("user", "next"),
+                TranscriptEntry("assistant", "latest"),
+            ]
+        )
         await pilot.app._add_agent_item(state, select=True)
         await pilot.app._run_local_command("/copy")
         assert copied == ["latest"]
@@ -958,13 +1084,15 @@ async def test_copy_numeric_count_grabs_latest_assistant_outputs() -> None:
     copied: list[str] = []
     async with CyberdeckApp(skip_boot=True, clipboard_writer=copied.append).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
-        state.transcript.extend([
-            TranscriptEntry("assistant", "oldest"),
-            TranscriptEntry("user", "question"),
-            TranscriptEntry("assistant", "middle\nresponse"),
-            TranscriptEntry("system", "diagnostic"),
-            TranscriptEntry("assistant", "latest"),
-        ])
+        state.transcript.extend(
+            [
+                TranscriptEntry("assistant", "oldest"),
+                TranscriptEntry("user", "question"),
+                TranscriptEntry("assistant", "middle\nresponse"),
+                TranscriptEntry("system", "diagnostic"),
+                TranscriptEntry("assistant", "latest"),
+            ]
+        )
         await pilot.app._add_agent_item(state, select=True)
 
         await pilot.app._run_local_command("/copy 2")
@@ -1078,13 +1206,17 @@ async def test_background_unread_count_tracks_messages_not_protocol_events() -> 
 
         background.transcript.append(TranscriptEntry("assistant", "first", source_id="one"))
         pilot.app._agent_event(background, AgentEvent("assistant_delta", "first", message_id="one"))
-        pilot.app._agent_event(background, AgentEvent("assistant_delta", " continues", message_id="one"))
+        pilot.app._agent_event(
+            background, AgentEvent("assistant_delta", " continues", message_id="one")
+        )
         pilot.app._agent_event(background, AgentEvent("token_usage"))
         pilot.app._agent_event(background, AgentEvent("status", "ready"))
         assert background.unread_count == 1
 
         background.transcript.append(TranscriptEntry("assistant", "second", source_id="two"))
-        pilot.app._agent_event(background, AgentEvent("assistant_delta", "second", message_id="two"))
+        pilot.app._agent_event(
+            background, AgentEvent("assistant_delta", "second", message_id="two")
+        )
         assert background.unread_count == 2
 
 
