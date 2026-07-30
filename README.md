@@ -65,6 +65,13 @@ cyberdeck --version
 cyberdeck
 ```
 
+The standalone bundle contains Cyberdeck's application files and a private embedded
+Python runtime because Cyberdeck still needs an interpreter to run. It does not create
+a virtual environment, install or link a Homebrew Python, or alter the machine's
+`python` and `python3` commands. Homebrew creates only the normal `cyberdeck` command
+symlink into its Cellar, and uninstalling the formula removes the bundled runtime with
+the rest of Cyberdeck.
+
 Upgrade, reinstall, or remove it with:
 
 ```bash
@@ -81,10 +88,6 @@ refresh the tap and reinstall the standalone formula:
 brew update
 brew reinstall jessecanderson/tap/cyberdeck
 ```
-
-The cask variant is also available for Apple Silicon, but the formula is the
-preferred command-line installation because it avoids macOS application
-quarantine handling.
 
 ### Managed macOS or existing Python runtime
 

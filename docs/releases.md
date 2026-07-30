@@ -48,12 +48,13 @@ silently publishing a partially validated formula.
 
 The expected result is one `release/cyberdeck-VERSION` pull request in the tap.
 Its required test-bot checks validate the formula before protected `main`
-auto-merges it. The cask is updated in the same commit after the formula input
-has been validated. Rerunning either workflow for the same tag reuses the
-existing release assets, release branch, and open pull request; it does not
-open a second tap PR. To roll back, revert the tap PR through the normal
-protected-branch process. To retry, fix the failed artifact or workflow input
-and rerun the tagged release workflow—never move or recreate a published tag.
+auto-merges it. The formula installs the standalone artifact, including its private
+embedded Python runtime; it does not depend on Homebrew Python or create a virtual
+environment. Rerunning either workflow for the same tag reuses the existing release
+assets, release branch, and open pull request; it does not open a second tap PR. To
+roll back, revert the tap PR through the normal protected-branch process. To retry,
+fix the failed artifact or workflow input and rerun the tagged release workflow—never
+move or recreate a published tag.
 
 ## macOS support
 
@@ -61,5 +62,7 @@ The standalone bundle and Homebrew validation run on Apple Silicon macOS 15.
 Other Apple Silicon releases are best-effort until added to the release matrix;
 Intel macOS is not currently packaged. Older macOS systems can encounter an
 Expat dynamic-library mismatch when using the retired Homebrew-Python formula.
-Use the standalone formula/cask on a supported system or the documented trusted
-Python installation. Do not bypass Gatekeeper or disable platform security.
+Use the standalone formula on a supported system or the documented trusted Python
+installation. The embedded runtime avoids a Homebrew Python dependency but cannot
+guarantee compatibility with every older macOS system library. Do not bypass
+Gatekeeper or disable platform security.
