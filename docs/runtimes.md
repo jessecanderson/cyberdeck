@@ -19,7 +19,7 @@ visible transcript from replayed session updates. Disconnected Kiro sessions
 are not currently discoverable through the Codex-only Archive Uplink.
 
 Use `/runtimes` to refresh executable preflight and show detected versions.
-Cyberdeck 0.3.5 was field-validated with `codex-cli 0.146.0` and is exercised
+Cyberdeck 0.3.6 was field-validated with `codex-cli 0.146.0` and is exercised
 against a fake App Server lifecycle fixture in CI. The fixture covers
 initialize, connect, send, approval, interrupt, and clean disconnect through
 the real subprocess/stdio boundary. Cyberdeck also reports the installed Codex
