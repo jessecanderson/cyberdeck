@@ -19,6 +19,10 @@ providers must not depend on Textual widgets or application screens.
   `completion.py` provides ordered, independently testable completion rules.
 - `ui/` contains screens and widgets. `ui/screens.py` is a compatibility export
   facade; new implementation code belongs in the focused UI modules.
+- The command palette is a UI-only selector over the existing command catalog. It
+  inserts a selected command back into the deck prompt so completion and execution
+  continue through `completion.py` and `command_runtime.py` rather than a parallel
+  dispatcher.
 - `builtin_modules.py` contains retained built-in workspace widgets and their typed
   module specification.
 - `clipboard.py` owns platform and terminal clipboard selection and error conversion.

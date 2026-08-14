@@ -103,7 +103,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.5/cyberdeck_tui-0.3.5-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.3.6/cyberdeck_tui-0.3.6-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"
@@ -162,12 +162,18 @@ directory, then enter a prompt. Cyberdeck stores Codex callsigns on the Codex
 thread itself; ACP provider capabilities determine whether other providers can
 persist names.
 `Ctrl+R` opens the manual Archive Uplink, where non-archived interactive Codex
-threads can be searched, multi-selected, and restored. `Ctrl+J` and `Ctrl+K`
+threads can be searched, multi-selected, and restored. `Ctrl+Up` and `Ctrl+Down`
 cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix, and
 `/switch CALLSIGN` jumps directly to a named uplink. Unsent
 drafts follow their agent, and Up/Down recalls process-local prompt history.
 Press `Ctrl+U` to discard the current unsent prompt or command without changing the
-transcript or provider context.
+transcript or provider context. The prompt expands and soft-wraps as you type;
+press Enter to submit and `Ctrl+J` to insert a deliberate newline. Shift+Enter
+also works in terminals that report it as a distinct key.
+Press `Ctrl+L` from elsewhere to focus the prompt. Press it again while the
+prompt is empty to open the searchable command palette; choosing a command
+inserts it into the prompt so its normal argument completion remains available.
+Direct slash commands continue to work and remain single-line.
 
 `Ctrl+G` opens Operative Control for rename, interrupt, retry, disconnect, and
 archive actions. Disconnect is reversible through Archive Uplink. `Ctrl+B`
@@ -181,7 +187,9 @@ the active module. Start with `/help`; current commands include `/new`,
 `/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
 `/quit`. The help window is scrollable and includes commands contributed by
 loaded modules. While autocomplete is visible, use Up/Down to highlight an
-option and Tab to accept it. The `Ctrl+P` Uplink Matrix likewise supports
+option and Tab to accept it. For `/new`, Enter uses the current valid directory;
+type a trailing slash and use Up/Down plus Tab when you want to descend farther.
+The `Ctrl+P` Uplink Matrix likewise supports
 Up/Down and Enter without moving focus out of its search field.
 
 Use `/context` to inspect the provider's latest reported context usage and

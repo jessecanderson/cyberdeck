@@ -58,6 +58,8 @@ from .providers import AgentEvent
 from .runtimes import RuntimeRegistry
 from .themes import DeckTheme, discover_themes, import_theme
 from .ui.boot import BootScreen
+from .ui.command_palette import CommandPalette
+from .ui.prompt import PromptEditor
 from .ui.screens import (
     AboutScreen,
     AgentSwitcher,
@@ -99,8 +101,8 @@ class CyberdeckApp(App[None]):
         ("ctrl+n", "spawn_agent", "New"),
         ("ctrl+r", "restore", "Restore"),
         ("ctrl+o", "operations", "Ops"),
-        Binding("ctrl+j", "next_agent", "Next", priority=True),
-        Binding("ctrl+k", "previous_agent", "Previous", priority=True),
+        Binding("ctrl+down", "next_agent", "Next", priority=True),
+        Binding("ctrl+up", "previous_agent", "Previous", priority=True),
         ("ctrl+q", "quit", "Quit"),
         Binding("ctrl+g", "agent_control", "Control", priority=True),
         Binding("ctrl+p", "agent_switcher", "Switch", priority=True),
@@ -126,6 +128,28 @@ class CyberdeckApp(App[None]):
         "disable": "disable an external module",
         "remove": "remove an external module and its environment",
     }
+
+    @property
+    def clipboard(self) -> str:
+        """Expose the system clipboard to Textual input paste actions."""
+        terminal_clipboard = super().clipboard
+        service = getattr(self, "clipboard_service", None)
+        return service.read(terminal_clipboard) if service else terminal_clipboard
+
+    def copy_to_clipboard(self, text: str) -> None:
+        """Keep editor copy actions aligned with the platform clipboard."""
+        service = getattr(self, "clipboard_service", None)
+        if service is None:
+            super().copy_to_clipboard(text)
+            return
+        try:
+            service.write(text, super().copy_to_clipboard)
+        except RuntimeError as exc:
+            super().copy_to_clipboard(text)
+            self.notify(str(exc), title="CLIPBOARD FAULT", severity="warning")
+        else:
+            if super().clipboard != text:
+                super().copy_to_clipboard(text)
 
     def __init__(
         self,
@@ -280,7 +304,7 @@ class CyberdeckApp(App[None]):
                     yield Static("▶ DECK:// 端末", id="prompt-label")
                     with Horizontal(id="prompt-bar"):
                         yield Static("local@deck:~ $", id="prompt-prefix")
-                        yield Input(
+                        yield PromptEditor(
                             placeholder="jack in... type a command or message",
                             id="prompt",
                         )
@@ -300,7 +324,7 @@ class CyberdeckApp(App[None]):
         self._update_rails()
         self.set_interval(1, self._update_rails)
         self.set_interval(0.28, self._update_network)
-        self.query_one("#prompt", Input).focus()
+        self.query_one("#prompt", PromptEditor).focus()
         requested = self.deck_config.active_module if self._persist_preferences else "agents"
         self.call_after_refresh(
             lambda: self._activate_module(requested if requested in self.deck_modules else "agents")
@@ -332,7 +356,7 @@ class CyberdeckApp(App[None]):
             "complete_prompt",
             "clear_prompt",
         }:
-            return main.query_one("#prompt", Input).has_focus
+            return main.query_one("#prompt", PromptEditor).has_focus
         if action == "focus_command":
             return self.screen is main
         if action == "workspace_focus":
@@ -340,7 +364,7 @@ class CyberdeckApp(App[None]):
                 self.screen is main
                 and self.deck_modules[self.active_module_id].input_mode
                 is ModuleInputMode.WORKSPACE_EDITOR
-                and main.query_one("#prompt", Input).has_focus
+                and main.query_one("#prompt", PromptEditor).has_focus
             )
         if action == "save_module":
             return self.screen is main
@@ -562,8 +586,8 @@ class CyberdeckApp(App[None]):
             raise ValueError("Cannot present an unregistered agent")
         await self._add_agent_item(state, select=select)
 
-    @on(Input.Submitted, "#prompt")
-    async def send_prompt(self, event: Input.Submitted) -> None:
+    @on(PromptEditor.Submitted, "#prompt")
+    async def send_prompt(self, event: PromptEditor.Submitted) -> None:
         if self._prompt_completions:
             before = event.input.value
             self.action_complete_prompt()
@@ -575,6 +599,13 @@ class CyberdeckApp(App[None]):
             self._render_prompt_completions()
         prompt = event.value.strip()
         if not prompt:
+            return
+        if prompt.startswith("/") and "\n" in prompt:
+            self.notify(
+                "Commands must stay on one line; edit the draft and submit again.",
+                title="COMMAND NOT SENT",
+                severity="warning",
+            )
             return
         self._prompt_history.append(prompt)
         self._history_index = None
@@ -626,9 +657,9 @@ class CyberdeckApp(App[None]):
         self._refresh_journal_days(query)
         self.notify("Quick entry recorded", title="JOURNAL")
 
-    @on(Input.Changed, "#prompt")
-    def prompt_changed(self, event: Input.Changed) -> None:
-        self._prompt_completions = self._complete(event.value)
+    @on(PromptEditor.Changed, "#prompt")
+    def prompt_changed(self, event: PromptEditor.Changed) -> None:
+        self._prompt_completions = self._complete(event.text_area.text)
         self._completion_index = 0
         self._render_prompt_completions()
 
@@ -654,7 +685,7 @@ class CyberdeckApp(App[None]):
         if self.screen is not self.screen_stack[0]:
             self.screen.focus_next()
             return
-        prompt = self.screen_stack[0].query_one("#prompt", Input)
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
         if not prompt.has_focus or not self._prompt_completions:
             return
         visible = self._prompt_completions[:6]
@@ -681,7 +712,7 @@ class CyberdeckApp(App[None]):
         if state:
             state.unread_count = 0
             state.unread_message_index = None
-        prompt = self.screen_stack[0].query_one("#prompt", Input)
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
         if self._draft_agent_id:
             previous = next(
                 (a for a in self.manager.agents if str(a.config.id) == self._draft_agent_id), None
@@ -731,7 +762,7 @@ class CyberdeckApp(App[None]):
                 operations.index = 0
             operations.focus()
         else:
-            self.query_one("#prompt", Input).focus()
+            self.query_one("#prompt", PromptEditor).focus()
 
     def action_next_agent(self) -> None:
         self._move_agent(1)
@@ -749,10 +780,22 @@ class CyberdeckApp(App[None]):
         self._apply_density(density)
 
     def action_focus_command(self) -> None:
-        self.screen_stack[0].query_one("#prompt", Input).focus()
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
+        if not prompt.has_focus:
+            prompt.focus()
+            return
+        if prompt.value:
+            return
+        self.push_screen(CommandPalette(self._all_local_commands()), self._use_palette_command)
+
+    def _use_palette_command(self, command: str | None) -> None:
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
+        if command:
+            prompt.value = f"{command} "
+        prompt.focus()
 
     def action_clear_prompt(self) -> None:
-        prompt = self.screen_stack[0].query_one("#prompt", Input)
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
         prompt.value = ""
         self._prompt_completions = []
         self._completion_index = 0
@@ -783,7 +826,7 @@ class CyberdeckApp(App[None]):
     def _focus_active_workspace(self) -> None:
         module = self.deck_modules[self.active_module_id]
         if module.input_mode is ModuleInputMode.DECK_PROMPT:
-            self.screen_stack[0].query_one("#prompt", Input).focus()
+            self.screen_stack[0].query_one("#prompt", PromptEditor).focus()
         elif module.focus_target:
             self.screen_stack[0].query_one(module.focus_target).focus()
 
@@ -806,7 +849,7 @@ class CyberdeckApp(App[None]):
             index for index, candidate in enumerate(ordered) if candidate == module_id
         )
         self._refresh_module_labels()
-        prompt = main.query_one("#prompt", Input)
+        prompt = main.query_one("#prompt", PromptEditor)
         if module_id == "agents":
             prompt.placeholder = "jack in... type a command or message"
             self._render_active()
@@ -996,11 +1039,14 @@ class CyberdeckApp(App[None]):
     def action_prompt_previous(self) -> None:
         if self._navigate_non_prompt(-1):
             return
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", PromptEditor)
         if prompt.has_focus and self._prompt_completions:
             visible_count = min(6, len(self._prompt_completions))
             self._completion_index = (self._completion_index - 1) % visible_count
             self._render_prompt_completions()
+            return
+        if prompt.has_focus and prompt.has_visual_line_above:
+            prompt.action_cursor_up()
             return
         if not prompt.has_focus or not self._prompt_history:
             return
@@ -1015,11 +1061,14 @@ class CyberdeckApp(App[None]):
     def action_prompt_next(self) -> None:
         if self._navigate_non_prompt(1):
             return
-        prompt = self.query_one("#prompt", Input)
+        prompt = self.query_one("#prompt", PromptEditor)
         if prompt.has_focus and self._prompt_completions:
             visible_count = min(6, len(self._prompt_completions))
             self._completion_index = (self._completion_index + 1) % visible_count
             self._render_prompt_completions()
+            return
+        if prompt.has_focus and prompt.has_visual_line_below:
+            prompt.action_cursor_down()
             return
         if not prompt.has_focus or self._history_index is None:
             return
@@ -1032,7 +1081,13 @@ class CyberdeckApp(App[None]):
         prompt.cursor_position = len(prompt.value)
 
     def _navigate_non_prompt(self, direction: int) -> bool:
-        result_screens = (AgentSwitcher, RestoreScreen, OperativeControl, DispatchScreen)
+        result_screens = (
+            AgentSwitcher,
+            RestoreScreen,
+            OperativeControl,
+            DispatchScreen,
+            CommandPalette,
+        )
         if isinstance(self.screen, result_screens):
             action = (
                 self.screen.action_previous_result
@@ -1150,7 +1205,7 @@ class CyberdeckApp(App[None]):
             operation = getattr(self.manager, action)
             await operation(state, argument) if action == "rename" else await operation(state)
             if action in {"disconnect", "archive"}:
-                self._sync_agent_list()
+                await self._sync_agent_list()
             signal = {
                 "rename": "CALLSIGN UPDATED",
                 "interrupt": "ABORT SIGNAL CONFIRMED",
@@ -1163,18 +1218,19 @@ class CyberdeckApp(App[None]):
             self._write_local(f"{action} failed: {exc}")
         self._refresh_all()
 
-    def _sync_agent_list(self) -> None:
+    async def _sync_agent_list(self) -> None:
         view = self.query_one("#agents", ListView)
-        view.clear()
+        previous_index = view.index or 0
+        await view.clear()
         for state in self.manager.agents:
-            view.append(
+            await view.append(
                 ListItem(
                     Label(self._agent_label(state)),
                     id=self._agent_row_id(state),
                 )
             )
         if self.manager.agents:
-            view.index = min(view.index or 0, len(self.manager.agents) - 1)
+            view.index = min(previous_index, len(self.manager.agents) - 1)
 
     def _move_agent(self, direction: int) -> None:
         view = self.query_one("#agents", ListView)
@@ -1636,7 +1692,7 @@ class CyberdeckApp(App[None]):
         self._write_local(f"CLIPBOARD WRITE CONFIRMED // {len(text)} characters via {target}")
 
     def _copy_text(self, text: str) -> str:
-        return self.clipboard_service.write(text, self.copy_to_clipboard)
+        return self.clipboard_service.write(text, super().copy_to_clipboard)
 
     def _find_agent(self, callsign: str) -> AgentState | None:
         name = callsign.casefold()
@@ -1760,7 +1816,7 @@ class CyberdeckApp(App[None]):
                 results.append(
                     f"{target.config.name} [{target.config.provider.upper()}]: FAILED // {exc}"
                 )
-        self._sync_agent_list()
+        await self._sync_agent_list()
         self._write_local("KILL SUMMARY\n" + "\n".join(results))
         self._refresh_all()
 
@@ -1878,7 +1934,7 @@ class CyberdeckApp(App[None]):
         if state is not self._active_agent():
             return
         self._reveal_latest_approval()
-        self.screen_stack[0].query_one("#prompt", Input).focus()
+        self.screen_stack[0].query_one("#prompt", PromptEditor).focus()
 
     def _approval_decided(
         self, state: AgentState, approval: PendingApproval, decision: str

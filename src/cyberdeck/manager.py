@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from contextlib import suppress
 from pathlib import Path
 
 from .domain import (
@@ -263,15 +264,23 @@ class AgentManager:
 
     async def _remove(self, state: AgentState) -> None:
         key = str(state.config.id)
-        task = self._tasks.pop(key, None)
-        if task:
-            task.cancel()
+        await self._cancel_pump(key)
         adapter = self._adapters.pop(key, None)
-        if adapter:
-            await adapter.stop()
-        if state in self.agents:
-            self.agents.remove(state)
-        state.status = AgentStatus.STOPPED
+        try:
+            if adapter:
+                await adapter.stop()
+        finally:
+            if state in self.agents:
+                self.agents.remove(state)
+            state.status = AgentStatus.STOPPED
+
+    async def _cancel_pump(self, key: str) -> None:
+        task = self._tasks.pop(key, None)
+        if not task:
+            return
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
 
     async def disconnect(self, state: AgentState) -> None:
         await self._remove(state)
@@ -289,9 +298,7 @@ class AgentManager:
             raise ValueError("Agent has no thread to restore")
         key = str(state.config.id)
         old_adapter = self._adapters.pop(key, None)
-        old_task = self._tasks.pop(key, None)
-        if old_task:
-            old_task.cancel()
+        await self._cancel_pump(key)
         if old_adapter:
             await old_adapter.stop()
         state.status = AgentStatus.RESTORING
@@ -368,9 +375,14 @@ class AgentManager:
         return list(await asyncio.gather(*(respond(approval) for approval in pending)))
 
     async def shutdown(self) -> None:
-        await asyncio.gather(*(adapter.stop() for adapter in self._adapters.values()))
-        for task in self._tasks.values():
+        tasks = tuple(self._tasks.values())
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(
+            *(adapter.stop() for adapter in self._adapters.values()), return_exceptions=True
+        )
 
     async def _pump(self, state: AgentState, adapter: AgentAdapter) -> None:
         try:

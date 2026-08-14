@@ -164,21 +164,26 @@ def _path(_app: CyberdeckApp, value: str, _words: list[str]) -> CompletionResult
             (
                 path
                 for path in directory.iterdir()
-                if path.is_dir() and path.name.startswith(prefix)
+                if (path.is_dir() or not is_new_path) and path.name.startswith(prefix)
             ),
             key=lambda path: path.name.casefold(),
         )
     except (OSError, RuntimeError, ValueError):
         return []
     results: list[Completion] = []
+    if is_new_path and token.endswith("/") and expanded.is_dir():
+        results.append((token, "use this directory"))
     for path in matches[:12]:
-        completed = str(path) + "/"
+        completed = str(path) + ("/" if path.is_dir() and not is_new_path else "")
         if token.startswith("~"):
             try:
-                completed = f"~/{path.relative_to(Path.home())}/"
+                completed = f"~/{path.relative_to(Path.home())}"
+                if path.is_dir() and not is_new_path:
+                    completed += "/"
             except ValueError:
                 pass
-        results.append((completed, "directory"))
+        if completed != token:
+            results.append((completed, "directory" if path.is_dir() else "file"))
     return results
 
 

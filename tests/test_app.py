@@ -1,4 +1,5 @@
 import asyncio
+import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -6,7 +7,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len, chop_cells
 from textual.containers import VerticalScroll
-from textual.widgets import Input, Label, ListItem, Static
+from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from cyberdeck import __version__
 from cyberdeck.app import (
@@ -40,6 +41,8 @@ from cyberdeck.manager import AgentManager
 from cyberdeck.module_registry import ModuleRegistry
 from cyberdeck.providers import AgentEvent
 from cyberdeck.runtimes import RuntimePreflight, RuntimeRegistry
+from cyberdeck.ui.command_palette import CommandPalette
+from cyberdeck.ui.prompt import PromptEditor
 
 
 @pytest.mark.asyncio
@@ -231,6 +234,151 @@ async def test_spawn_agent_inputs_are_visible_and_accept_text() -> None:
 
 
 @pytest.mark.asyncio
+async def test_prompt_ctrl_v_reads_system_clipboard(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("cyberdeck.clipboard.sys.platform", "darwin")
+    monkeypatch.setattr("cyberdeck.clipboard.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(
+        "cyberdeck.clipboard.subprocess.run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, "pasted signal", ""),
+    )
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        await pilot.press("ctrl+v")
+
+        assert prompt.value == "pasted signal"
+
+
+@pytest.mark.asyncio
+async def test_prompt_wraps_and_shift_enter_preserves_multiline_draft() -> None:
+    submitted: list[str] = []
+
+    async def record_prompt(prompt: str) -> None:
+        submitted.append(prompt)
+
+    async with CyberdeckApp(skip_boot=True).run_test(size=(54, 24)) as pilot:
+        pilot.app.deck_modules["agents"].handle_prompt = record_prompt
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        await pilot.press(*"first line")
+        await pilot.press("shift+enter")
+        await pilot.press(*"second line with enough text to wrap across the editor")
+        await pilot.pause()
+
+        assert prompt.value.startswith("first line\nsecond line")
+        assert prompt.wrapped_document.height >= 3
+        assert prompt.outer_size.height > 1
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert submitted == ["first line\nsecond line with enough text to wrap across the editor"]
+        assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_prompt_ctrl_j_inserts_portable_newline() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        await pilot.press(*"first", "ctrl+j", *"second")
+
+        assert prompt.value == "first\nsecond"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_l_opens_palette_only_from_empty_focused_prompt() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        prompt.value = "draft in progress"
+
+        await pilot.press("ctrl+l")
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.value == "draft in progress"
+
+        prompt.value = ""
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+
+        assert isinstance(pilot.app.screen, CommandPalette)
+        assert pilot.app.screen.query_one("#command-palette-search", Input).has_focus
+
+
+@pytest.mark.asyncio
+async def test_command_palette_filters_and_inserts_into_existing_prompt_path() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        await pilot.press("ctrl+l")
+        await pilot.press(*"density")
+        await pilot.pause()
+
+        palette = pilot.app.screen
+        assert isinstance(palette, CommandPalette)
+        assert palette.filtered == (
+            ("/density", "show or set workspace density: standard|compact"),
+        )
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.has_focus
+        assert prompt.value == "/density "
+        assert [row[0] for row in pilot.app._prompt_completions] == ["standard", "compact"]
+
+
+@pytest.mark.asyncio
+async def test_command_palette_arrows_move_results_without_leaving_search() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+        palette = pilot.app.screen
+        assert isinstance(palette, CommandPalette)
+        search = palette.query_one("#command-palette-search", Input)
+        results = palette.query_one("#command-palette-list", ListView)
+
+        await pilot.press("down", "down", "up")
+
+        assert search.has_focus
+        assert results.index == 1
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pilot.app.query_one("#prompt", PromptEditor).value == "/runtimes "
+
+
+@pytest.mark.asyncio
+async def test_command_palette_escape_restores_empty_prompt_focus() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        await pilot.press("ctrl+l", "escape")
+        await pilot.pause()
+
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.has_focus
+        assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_multiline_slash_command_is_preserved_and_not_executed() -> None:
+    executed: list[str] = []
+
+    async def record_command(command_line: str) -> None:
+        executed.append(command_line)
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.execute_command = record_command
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.value = "/path\nthis belongs in chat"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert executed == []
+        assert prompt.value == "/path\nthis belongs in chat"
+        assert pilot.app._prompt_history == []
+
+
+@pytest.mark.asyncio
 async def test_spawn_agent_refuses_unavailable_runtime() -> None:
     unavailable = RuntimePreflight("offline", "Offline ACP", False, "executable missing")
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
@@ -245,14 +393,23 @@ async def test_spawn_agent_refuses_unavailable_runtime() -> None:
         assert "RUNTIME UNAVAILABLE" in str(pilot.app.screen.query_one("#spawn-help").content)
 
 
-def test_new_command_autocompletes_agent_runtimes() -> None:
+def test_new_command_autocompletes_agent_runtimes(tmp_path: Path) -> None:
     app = CyberdeckApp(skip_boot=True)
     assert app._complete("/new ghost ")[:2] == [
         ("codex", "agent runtime"),
         ("kiro", "agent runtime"),
     ]
     assert app._complete("/new ghost k") == [("kiro", "agent runtime")]
-    assert app._complete("/new ghost kiro /tm") == [("/tmp/", "directory")]
+    assert app._complete("/new ghost kiro /tm") == [("/tmp", "directory")]
+    assert app._complete("/new ghost kiro /tmp") == []
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    trailing = f"/new ghost kiro {parent}/"
+    assert app._complete(trailing) == [
+        (f"{parent}/", "use this directory"),
+        (str(child), "directory"),
+    ]
     assert app._complete("/new ghost /tmp/ k") == [("kiro", "agent runtime")]
     assert app._complete("/new ghost /tmp/ ") == [
         ("codex", "agent runtime"),
@@ -264,6 +421,33 @@ def test_new_command_autocompletes_agent_runtimes() -> None:
         ("/deny", "deny the latest ICE request"),
         ("/density", "show or set workspace density: standard|compact"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_new_path_can_submit_parent_or_tab_into_child(tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    child = parent / "child"
+    child.mkdir(parents=True)
+    submitted: list[str] = []
+
+    async def record_command(command_line: str) -> None:
+        submitted.append(command_line)
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.execute_command = record_command
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        prompt.value = f"/new ghost codex {parent}/"
+        await pilot.pause()
+
+        await pilot.press("enter")
+        await pilot.pause()
+        assert submitted == [f"/new ghost codex {parent}/"]
+
+        prompt.value = f"/new cipher codex {parent}/"
+        await pilot.pause()
+        await pilot.press("down", "tab")
+        assert prompt.value == f"/new cipher codex {child}"
 
 
 def test_new_command_autocompletes_configured_runtime() -> None:
@@ -437,7 +621,7 @@ async def test_ice_card_keeps_prompt_typing_and_accepts_slash_decision() -> None
         await pilot.press("y")
         await pilot.pause()
 
-        prompt = pilot.app.query_one("#prompt", Input)
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
         assert prompt.value == "y"
         assert adapter.approvals == []
         assert len(state.pending_approvals) == 1
@@ -473,7 +657,7 @@ async def test_prompt_accepts_draft_while_acp_turn_remains_open() -> None:
         await pilot.app._add_agent_item(state, select=True)
         await pilot.pause()
 
-        prompt = pilot.app.query_one("#prompt", Input)
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
         prompt.value = "start long turn"
         prompt.focus()
         await pilot.press("enter")
@@ -782,6 +966,19 @@ def test_prompt_completion_ignores_unresolvable_tilde_token() -> None:
     assert app._complete("Create me a test.txt doc in ~d") == []
 
 
+def test_general_path_completion_includes_directories_and_files(tmp_path: Path) -> None:
+    directory = tmp_path / "source"
+    file = tmp_path / "signal.txt"
+    directory.mkdir()
+    file.write_text("signal", encoding="utf-8")
+    app = CyberdeckApp(skip_boot=True)
+
+    assert app._complete(f"inspect {tmp_path}/s") == [
+        (str(file), "file"),
+        (f"{directory}/", "directory"),
+    ]
+
+
 def test_agent_commands_complete_callsigns_and_kill_all() -> None:
     app = CyberdeckApp(skip_boot=True)
     app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
@@ -845,7 +1042,7 @@ async def test_enter_submits_kill_with_exact_autocompleted_callsign() -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         pilot.app.execute_command = record_command
         pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
-        prompt = pilot.app.query_one("#prompt", Input)
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
         prompt.focus()
         prompt.value = "/kill gh"
         await pilot.pause()
@@ -871,7 +1068,7 @@ async def test_ctrl_u_clears_prompt_completion_history_navigation_and_agent_draf
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         state = pilot.app.manager.register("Ghost", Path("/tmp"), status=AgentStatus.READY)
         await pilot.app.present_agent(state)
-        prompt = pilot.app.query_one("#prompt", Input)
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
         prompt.focus()
         prompt.value = "/kill gh"
         state.prompt_draft = "/kill gh"
@@ -901,9 +1098,9 @@ async def test_navigation_wraps_many_agents_and_switches_by_callsign() -> None:
 
         prompt = pilot.app.query_one("#prompt")
         prompt.focus()
-        await pilot.press("ctrl+k")
+        await pilot.press("ctrl+up")
         assert pilot.app._active_agent().config.name == "agent-39"
-        await pilot.press("ctrl+j")
+        await pilot.press("ctrl+down")
         assert pilot.app._active_agent().config.name == "agent-00"
 
         await pilot.app._run_local_command("/switch AGENT-27")
@@ -1149,6 +1346,22 @@ async def test_kill_requires_confirmation() -> None:
         await pilot.press("y")
         await pilot.pause()
         assert state not in pilot.app.manager.agents
+
+
+@pytest.mark.asyncio
+async def test_killing_one_agent_rebuilds_sidebar_without_duplicate_ids() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        ghost = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        cipher = pilot.app.manager.register("cipher", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app.present_agent(ghost)
+        await pilot.app.present_agent(cipher)
+
+        await pilot.app._run_local_command("/kill ghost")
+        await pilot.press("y")
+        await pilot.pause()
+
+        assert [agent.config.name for agent in pilot.app.manager.agents] == ["cipher"]
+        assert len(pilot.app.query("#agents > ListItem")) == 1
 
 
 @pytest.mark.asyncio
