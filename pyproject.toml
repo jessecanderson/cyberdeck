@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=1.31,<2"]
+requires = ["hatchling>=1.31,<1.32"]
 build-backend = "hatchling.build"
 
 [project]
@@ -40,7 +40,7 @@ Releases = "https://github.com/jessecanderson/cyberdeck/releases"
 [project.optional-dependencies]
 dev = [
   "build>=1.4,<2",
-  "hatchling>=1.31,<2",
+  "hatchling>=1.31,<1.32",
   "pytest>=9.1,<10",
   "pytest-asyncio>=1.4,<2",
   "ruff>=0.16,<1",

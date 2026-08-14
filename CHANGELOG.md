@@ -7,6 +7,8 @@ All notable changes to Cyberdeck are documented here. The project follows
 
 ### Fixed
 
+- Keep release builds on the metadata-compatible Hatchling 1.31 line until the
+  distribution validation toolchain accepts core metadata 2.5.
 - Prevent agent disconnect and retry from racing cancelled provider event pumps,
   rebuild the surviving-agent sidebar deterministically after `/kill`, restore
   symmetric macOS clipboard behavior, and let `/new` path completion either stop
