@@ -3,7 +3,7 @@
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.3.5] - 2026-07-30
+## [0.3.6] - 2026-08-14
 
 ### Fixed
 
@@ -14,13 +14,27 @@ All notable changes to Cyberdeck are documented here. The project follows
 
 ### Added
 
+- Add a searchable command palette without replacing direct slash commands.
+  `Ctrl+L` focuses the prompt, then opens the palette when the focused prompt is
+  empty; choosing a command returns it to the existing completion and execution path.
+
+### Changed
+
+- Use `Ctrl+J` for a portable composer newline and move previous/next uplink
+  cycling to `Ctrl+Up` / `Ctrl+Down`.
+
+- Replace the single-line deck prompt with a soft-wrapping multiline editor. Enter
+  submits, `Ctrl+J` inserts a newline, and multiline paste is preserved. Shift+Enter
+  remains available when the terminal reports it as a distinct key.
+
+## [0.3.5] - 2026-07-30
+
+### Added
+
 - Clear the current unsent prompt, completion, and draft with `Ctrl+U` without
   changing transcript or provider context.
 
 ### Changed
-
-- Replace the single-line deck prompt with a soft-wrapping multiline editor. Enter
-  submits, Shift+Enter inserts a newline, and multiline paste is preserved.
 
 - Split the Textual composition root into focused boot, modal, agent, transcript,
   operation, and built-in workspace modules while preserving existing imports.
@@ -241,6 +255,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
+[0.3.6]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.5...v0.3.6
 [0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
 [0.3.5]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.4...v0.3.5
 [0.3.4]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.3...v0.3.4

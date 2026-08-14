@@ -90,9 +90,10 @@ class HelpScreen(ModalScreen[None]):
                 "KEYBOARD",
                 "",
                 "Ctrl+N new   Ctrl+R restore   Ctrl+G control   Ctrl+P switch",
-                "Ctrl+B dispatch   F6 next module   Ctrl+L command line",
+                "Ctrl+B dispatch   F6 next module   Ctrl+L prompt / command palette",
                 "Ctrl+S save editor   Ctrl+O operations",
-                "Ctrl+J/K switch uplink   Esc close window   Ctrl+Q quit",
+                "Ctrl+J prompt newline   Ctrl+Up/Down switch uplink",
+                "Esc close window   Ctrl+Q quit",
             ]
         )
         return "\n".join(rows)

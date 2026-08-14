@@ -58,6 +58,7 @@ from .providers import AgentEvent
 from .runtimes import RuntimeRegistry
 from .themes import DeckTheme, discover_themes, import_theme
 from .ui.boot import BootScreen
+from .ui.command_palette import CommandPalette
 from .ui.prompt import PromptEditor
 from .ui.screens import (
     AboutScreen,
@@ -100,8 +101,8 @@ class CyberdeckApp(App[None]):
         ("ctrl+n", "spawn_agent", "New"),
         ("ctrl+r", "restore", "Restore"),
         ("ctrl+o", "operations", "Ops"),
-        Binding("ctrl+j", "next_agent", "Next", priority=True),
-        Binding("ctrl+k", "previous_agent", "Previous", priority=True),
+        Binding("ctrl+down", "next_agent", "Next", priority=True),
+        Binding("ctrl+up", "previous_agent", "Previous", priority=True),
         ("ctrl+q", "quit", "Quit"),
         Binding("ctrl+g", "agent_control", "Control", priority=True),
         Binding("ctrl+p", "agent_switcher", "Switch", priority=True),
@@ -599,6 +600,13 @@ class CyberdeckApp(App[None]):
         prompt = event.value.strip()
         if not prompt:
             return
+        if prompt.startswith("/") and "\n" in prompt:
+            self.notify(
+                "Commands must stay on one line; edit the draft and submit again.",
+                title="COMMAND NOT SENT",
+                severity="warning",
+            )
+            return
         self._prompt_history.append(prompt)
         self._history_index = None
         self._history_draft = ""
@@ -772,7 +780,19 @@ class CyberdeckApp(App[None]):
         self._apply_density(density)
 
     def action_focus_command(self) -> None:
-        self.screen_stack[0].query_one("#prompt", PromptEditor).focus()
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
+        if not prompt.has_focus:
+            prompt.focus()
+            return
+        if prompt.value:
+            return
+        self.push_screen(CommandPalette(self._all_local_commands()), self._use_palette_command)
+
+    def _use_palette_command(self, command: str | None) -> None:
+        prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
+        if command:
+            prompt.value = f"{command} "
+        prompt.focus()
 
     def action_clear_prompt(self) -> None:
         prompt = self.screen_stack[0].query_one("#prompt", PromptEditor)
@@ -1061,7 +1081,13 @@ class CyberdeckApp(App[None]):
         prompt.cursor_position = len(prompt.value)
 
     def _navigate_non_prompt(self, direction: int) -> bool:
-        result_screens = (AgentSwitcher, RestoreScreen, OperativeControl, DispatchScreen)
+        result_screens = (
+            AgentSwitcher,
+            RestoreScreen,
+            OperativeControl,
+            DispatchScreen,
+            CommandPalette,
+        )
         if isinstance(self.screen, result_screens):
             action = (
                 self.screen.action_previous_result

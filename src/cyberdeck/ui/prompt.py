@@ -11,12 +11,13 @@ from textual.widgets import TextArea
 
 
 class PromptEditor(TextArea):
-    """A soft-wrapping prompt where Enter submits and Shift+Enter adds a line."""
+    """A soft-wrapping prompt with explicit submit and newline actions."""
 
     BINDINGS: ClassVar = [
         *TextArea.BINDINGS,
         Binding("enter", "submit", "Submit", show=False, priority=True),
         Binding("shift+enter", "newline", "New line", show=False, priority=True),
+        Binding("ctrl+j", "newline", "New line", show=False, priority=True),
     ]
 
     @dataclass

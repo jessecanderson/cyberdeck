@@ -127,7 +127,7 @@ BootScreen {
     border-top: solid #153244; content-align: right middle;
 }
 
-SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen, ThemeScreen { align: center middle; background: rgba(0, 0, 8, 0.88); }
+SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScreen, OperativeControl, AgentSwitcher, DispatchScreen, ThemeScreen, CommandPalette { align: center middle; background: rgba(0, 0, 8, 0.88); }
 #spawn-dialog, #help-dialog, #restore-dialog {
     width: 76; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
@@ -149,7 +149,7 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #restore-help, .modal-help { height: 2; color: $muted; content-align: center middle; }
 .approval-message { width: 78; max-width: 94%; height: auto; margin: 1 0 1 10; background: #09070d; }
 #operation-detail { width: 90%; height: 85%; padding: 2 3; background: #050b14; border: tall $cyan; }
-#confirm-dialog, #control-dialog, #switch-dialog, #dispatch-dialog {
+#confirm-dialog, #control-dialog, #switch-dialog, #dispatch-dialog, #command-palette-dialog {
     width: 78; max-width: 94%; padding: 1 2; background: $surface; border: tall $cyan;
 }
 #theme-dialog { width: 78; max-width: 94%; height: 65%; padding: 1 2; background: $surface; border: double $magenta; }
@@ -163,20 +163,22 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #confirm-dialog { height: 12; border: double $red; }
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }
+#command-palette-dialog { width: 88; height: 70%; border: double $magenta; }
 #dispatch-dialog { width: 96; height: 80%; border: double $magenta; }
 #transcript-select-dialog { width: 96; height: 80%; border: double $cyan; background: $surface; padding: 1 2; }
 #transcript-select-title { height: 2; color: $cyan; text-style: bold; }
 #transcript-select-list { height: 1fr; margin: 1 0; background: #050a10; }
 #transcript-select-list > ListItem { height: auto; min-height: 2; padding: 0 1; }
 #transcript-select-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
-#confirm-title, #control-title, #switch-title, #dispatch-title {
+#confirm-title, #control-title, #switch-title, #dispatch-title, #command-palette-title {
     height: 3; color: $cyan; text-style: bold; content-align: center middle; border-bottom: solid #153244;
 }
 #confirm-message { height: 1fr; padding: 1; content-align: center middle; }
-#control-name, #switch-search, #dispatch-search, #dispatch-prompt { height: 3; margin-top: 1; border: tall #1a4052; background: #071019; }
-#control-list, #switch-list, #dispatch-list { height: 1fr; margin: 1 0; background: #050a10; }
+#control-name, #switch-search, #dispatch-search, #dispatch-prompt, #command-palette-search { height: 3; margin-top: 1; border: tall #1a4052; background: #071019; }
+#control-list, #switch-list, #dispatch-list, #command-palette-list { height: 1fr; margin: 1 0; background: #050a10; }
 #control-list > ListItem { height: 2; padding: 0 1; }
 #switch-list > ListItem { height: 3; padding: 0 1; }
 #dispatch-list > ListItem { height: 2; padding: 0 1; }
-#control-list > ListItem.--highlight, #switch-list > ListItem.--highlight, #dispatch-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
+#command-palette-list > ListItem { height: 3; padding: 0 1; color: $muted; }
+#control-list > ListItem.--highlight, #switch-list > ListItem.--highlight, #dispatch-list > ListItem.--highlight, #command-palette-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #dispatch-help { height: 2; color: $muted; content-align: center middle; }

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from rich.cells import cell_len, chop_cells
 from textual.containers import VerticalScroll
-from textual.widgets import Input, Label, ListItem, Static
+from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from cyberdeck import __version__
 from cyberdeck.app import (
@@ -41,6 +41,7 @@ from cyberdeck.manager import AgentManager
 from cyberdeck.module_registry import ModuleRegistry
 from cyberdeck.providers import AgentEvent
 from cyberdeck.runtimes import RuntimePreflight, RuntimeRegistry
+from cyberdeck.ui.command_palette import CommandPalette
 from cyberdeck.ui.prompt import PromptEditor
 
 
@@ -272,6 +273,109 @@ async def test_prompt_wraps_and_shift_enter_preserves_multiline_draft() -> None:
         await pilot.pause()
         assert submitted == ["first line\nsecond line with enough text to wrap across the editor"]
         assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_prompt_ctrl_j_inserts_portable_newline() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        await pilot.press(*"first", "ctrl+j", *"second")
+
+        assert prompt.value == "first\nsecond"
+
+
+@pytest.mark.asyncio
+async def test_ctrl_l_opens_palette_only_from_empty_focused_prompt() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.focus()
+        prompt.value = "draft in progress"
+
+        await pilot.press("ctrl+l")
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.value == "draft in progress"
+
+        prompt.value = ""
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+
+        assert isinstance(pilot.app.screen, CommandPalette)
+        assert pilot.app.screen.query_one("#command-palette-search", Input).has_focus
+
+
+@pytest.mark.asyncio
+async def test_command_palette_filters_and_inserts_into_existing_prompt_path() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        await pilot.press("ctrl+l")
+        await pilot.press(*"density")
+        await pilot.pause()
+
+        palette = pilot.app.screen
+        assert isinstance(palette, CommandPalette)
+        assert palette.filtered == (
+            ("/density", "show or set workspace density: standard|compact"),
+        )
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.has_focus
+        assert prompt.value == "/density "
+        assert [row[0] for row in pilot.app._prompt_completions] == ["standard", "compact"]
+
+
+@pytest.mark.asyncio
+async def test_command_palette_arrows_move_results_without_leaving_search() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        await pilot.press("ctrl+l")
+        await pilot.pause()
+        palette = pilot.app.screen
+        assert isinstance(palette, CommandPalette)
+        search = palette.query_one("#command-palette-search", Input)
+        results = palette.query_one("#command-palette-list", ListView)
+
+        await pilot.press("down", "down", "up")
+
+        assert search.has_focus
+        assert results.index == 1
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pilot.app.query_one("#prompt", PromptEditor).value == "/runtimes "
+
+
+@pytest.mark.asyncio
+async def test_command_palette_escape_restores_empty_prompt_focus() -> None:
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        await pilot.press("ctrl+l", "escape")
+        await pilot.pause()
+
+        assert pilot.app.screen is pilot.app.screen_stack[0]
+        assert prompt.has_focus
+        assert prompt.value == ""
+
+
+@pytest.mark.asyncio
+async def test_multiline_slash_command_is_preserved_and_not_executed() -> None:
+    executed: list[str] = []
+
+    async def record_command(command_line: str) -> None:
+        executed.append(command_line)
+
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.execute_command = record_command
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        prompt.value = "/path\nthis belongs in chat"
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert executed == []
+        assert prompt.value == "/path\nthis belongs in chat"
+        assert pilot.app._prompt_history == []
 
 
 @pytest.mark.asyncio
@@ -994,9 +1098,9 @@ async def test_navigation_wraps_many_agents_and_switches_by_callsign() -> None:
 
         prompt = pilot.app.query_one("#prompt")
         prompt.focus()
-        await pilot.press("ctrl+k")
+        await pilot.press("ctrl+up")
         assert pilot.app._active_agent().config.name == "agent-39"
-        await pilot.press("ctrl+j")
+        await pilot.press("ctrl+down")
         assert pilot.app._active_agent().config.name == "agent-00"
 
         await pilot.app._run_local_command("/switch AGENT-27")
