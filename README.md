@@ -167,7 +167,8 @@ cycle between uplinks; `Ctrl+P` opens the searchable Uplink Matrix, and
 `/switch CALLSIGN` jumps directly to a named uplink. Unsent
 drafts follow their agent, and Up/Down recalls process-local prompt history.
 Press `Ctrl+U` to discard the current unsent prompt or command without changing the
-transcript or provider context.
+transcript or provider context. The prompt expands and soft-wraps as you type;
+press Enter to submit and Shift+Enter to insert a deliberate newline.
 
 `Ctrl+G` opens Operative Control for rename, interrupt, retry, disconnect, and
 archive actions. Disconnect is reversible through Archive Uplink. `Ctrl+B`
@@ -181,7 +182,9 @@ the active module. Start with `/help`; current commands include `/new`,
 `/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
 `/quit`. The help window is scrollable and includes commands contributed by
 loaded modules. While autocomplete is visible, use Up/Down to highlight an
-option and Tab to accept it. The `Ctrl+P` Uplink Matrix likewise supports
+option and Tab to accept it. For `/new`, Enter uses the current valid directory;
+type a trailing slash and use Up/Down plus Tab when you want to descend farther.
+The `Ctrl+P` Uplink Matrix likewise supports
 Up/Down and Enter without moving focus out of its search field.
 
 Use `/context` to inspect the provider's latest reported context usage and

@@ -24,6 +24,25 @@ class ClipboardService:
             raise RuntimeError(f"terminal clipboard failed: {exc}") from exc
         return "terminal protocol"
 
+    def read(self, terminal_clipboard: str) -> str:
+        """Read the platform clipboard when available, with Textual as fallback."""
+        if sys.platform != "darwin":
+            return terminal_clipboard
+        executable = shutil.which("pbpaste")
+        if not executable:
+            return terminal_clipboard
+        try:
+            result = subprocess.run(
+                [executable],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=2,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return terminal_clipboard
+        return result.stdout
+
     @staticmethod
     def _write_macos(text: str) -> str:
         executable = shutil.which("pbcopy")

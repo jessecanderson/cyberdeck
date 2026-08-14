@@ -237,6 +237,99 @@ async def test_disconnect_stops_and_removes_without_archiving() -> None:
 
 
 @pytest.mark.asyncio
+async def test_disconnect_waits_for_event_pump_before_stopping_adapter() -> None:
+    pump_started = asyncio.Event()
+    pump_closed = False
+
+    class BlockingAdapter(FakeAdapter):
+        async def events(self):
+            nonlocal pump_closed
+            pump_started.set()
+            try:
+                await asyncio.Event().wait()
+                yield AgentEvent("unreachable", "")
+            finally:
+                pump_closed = True
+
+        async def stop(self):
+            assert pump_closed
+            await super().stop()
+
+    adapter = BlockingAdapter()
+    deck = AgentManager(lambda state, event: None, adapter_factory=lambda: adapter)
+    state = deck.register("ghost", Path("/tmp"))
+    await deck.connect(state)
+    await pump_started.wait()
+
+    await deck.disconnect(state)
+
+    assert adapter.stopped
+    assert state.status is AgentStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_disconnect_removes_agent_even_when_adapter_stop_fails() -> None:
+    class FailingStopAdapter(FakeAdapter):
+        async def stop(self):
+            raise RuntimeError("process would not stop")
+
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    deck.attach_adapter(state, FailingStopAdapter())
+
+    with pytest.raises(RuntimeError, match="would not stop"):
+        await deck.disconnect(state)
+
+    assert state not in deck.agents
+    assert state.status is AgentStatus.STOPPED
+
+
+@pytest.mark.asyncio
+async def test_retry_waits_for_old_event_pump_before_stopping_adapter() -> None:
+    pump_started = asyncio.Event()
+    pump_closed = False
+
+    class BlockingAdapter(FakeAdapter):
+        async def events(self):
+            nonlocal pump_closed
+            pump_started.set()
+            try:
+                await asyncio.Event().wait()
+                yield AgentEvent("unreachable", "")
+            finally:
+                pump_closed = True
+
+        async def stop(self):
+            assert pump_closed
+            await super().stop()
+
+    adapters: list[FakeAdapter] = [BlockingAdapter(), FakeAdapter()]
+    deck = AgentManager(lambda state, event: None, adapter_factory=lambda: adapters.pop(0))
+    state = deck.register("ghost", Path("/tmp"))
+    await deck.connect(state)
+    state.capabilities = AgentCapabilities(load_session=True)
+    await pump_started.wait()
+
+    await deck.retry(state)
+
+    assert pump_closed
+    await deck.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_contains_individual_adapter_stop_failures() -> None:
+    class FailingStopAdapter(FakeAdapter):
+        async def stop(self):
+            raise RuntimeError("already gone")
+
+    deck = manager()
+    state = deck.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+    deck.attach_adapter(state, FailingStopAdapter())
+
+    await deck.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_retry_resumes_same_thread_and_becomes_ready() -> None:
     deck = manager()
     state, old = attach(deck, "ghost")

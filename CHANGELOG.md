@@ -5,12 +5,22 @@ All notable changes to Cyberdeck are documented here. The project follows
 
 ## [0.3.5] - 2026-07-30
 
+### Fixed
+
+- Prevent agent disconnect and retry from racing cancelled provider event pumps,
+  rebuild the surviving-agent sidebar deterministically after `/kill`, restore
+  symmetric macOS clipboard behavior, and let `/new` path completion either stop
+  on the current directory or deliberately descend farther.
+
 ### Added
 
 - Clear the current unsent prompt, completion, and draft with `Ctrl+U` without
   changing transcript or provider context.
 
 ### Changed
+
+- Replace the single-line deck prompt with a soft-wrapping multiline editor. Enter
+  submits, Shift+Enter inserts a newline, and multiline paste is preserved.
 
 - Split the Textual composition root into focused boot, modal, agent, transcript,
   operation, and built-in workspace modules while preserving existing imports.
