@@ -35,6 +35,7 @@ The create dialog and `/new` accept any registered runtime ID:
 /new ghost
 /new wintermute kiro ~/src/project
 /new molly work-agent ~/src/project
+/new wintermute kiro ~/src/project --agent security/reviewer
 ```
 
 Set the default and register another local ACP command in Cyberdeck's
@@ -70,6 +71,36 @@ values are `read-only`, `workspace-write`, and `danger-full-access`. Invalid
 values fall back safely and are reported at startup. Configuration never stores
 provider credentials. File configuration supplies defaults; an explicit
 `/new` path or runtime always wins for that uplink.
+
+### Harness-native agents
+
+New Uplink refreshes agent identity metadata whenever its workspace or runtime changes.
+It reads Codex definitions from `~/.codex/agents/*.toml` and
+`WORKSPACE/.codex/agents/*.toml`, and Kiro definitions recursively from
+`~/.kiro/agents/**/*.{json,md}` and `WORKSPACE/.kiro/agents/**/*.{json,md}`.
+Workspace Kiro definitions override personal definitions with the same relative ID.
+
+Kiro entries can be launched with `--agent NATIVE`; Cyberdeck delegates validation and
+all capabilities to `kiro-cli acp --agent NATIVE`. Codex entries are view-only because
+App Server does not expose named primary-agent selection. The default-harness row keeps
+the ordinary launch behavior. Cyberdeck reads only names and descriptions: plugins,
+skills, MCP servers, hooks, permissions, and credentials remain harness-owned and are
+not imported or persisted.
+
+Harness-native agents and plugins are distinct from Cyberdeck Module API v1. Modules
+extend Cyberdeck itself; native definitions configure the owning provider harness.
+
+### Steering and queued input
+
+Submitting more input while Codex is working steers its active turn through App
+Server. ACP v1 has no equivalent steering request, so Cyberdeck queues additional
+Kiro or generic ACP prompts per uplink and sends them in order whenever that agent
+returns to `READY`. Queues are in-memory and are not restored after restart.
+
+When Codex reports per-turn token usage, Cyberdeck adds a concise usage line after
+the turn completes. This includes only fields returned by App Server; Cyberdeck does
+not estimate money or workspace credits from tokens. ACP runtimes show no turn usage
+unless the protocol exposes an equivalent provider-owned event in the future.
 
 Workspace density is a presentation-only preference. `/density compact` or
 `F7` reduces post-boot workspace chrome and spacing; `/density standard`

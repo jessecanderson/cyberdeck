@@ -429,8 +429,11 @@ def kiro_executable() -> str:
 
 
 class KiroAcpAdapter(AcpAgentAdapter):
-    def __init__(self, executable: str | None = None) -> None:
+    def __init__(self, executable: str | None = None, native_agent: str | None = None) -> None:
+        command = [executable or kiro_executable(), "acp"]
+        if native_agent is not None:
+            command.extend(("--agent", native_agent))
         super().__init__(
-            (executable or kiro_executable(), "acp"),
+            command,
             provider="kiro",
         )

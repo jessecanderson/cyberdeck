@@ -39,6 +39,7 @@ from cyberdeck.domain import (
 )
 from cyberdeck.manager import AgentManager
 from cyberdeck.module_registry import ModuleRegistry
+from cyberdeck.native_agents import NativeAgent, NativeAgentCatalog
 from cyberdeck.providers import AgentEvent
 from cyberdeck.runtimes import RuntimePreflight, RuntimeRegistry
 from cyberdeck.ui.command_palette import CommandPalette
@@ -231,6 +232,35 @@ async def test_spawn_agent_inputs_are_visible_and_accept_text() -> None:
         name.focus()
         await pilot.press("g", "h", "o", "s", "t")
         assert name.value == "ghost"
+
+
+@pytest.mark.asyncio
+async def test_spawn_list_enter_selects_highlighted_native_agent(tmp_path: Path) -> None:
+    native = NativeAgent(
+        "kiro",
+        "team/reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / ".kiro" / "agents" / "team" / "reviewer.json",
+        True,
+    )
+    catalog = NativeAgentCatalog((native,))
+    runtimes = (RuntimePreflight("kiro", "Kiro", True, "ready"),)
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.push_screen(SpawnAgent(runtimes, "kiro", catalog_loader=lambda _path: catalog))
+        await pilot.pause()
+        screen = pilot.app.screen
+        results = screen.query_one("#spawn-native-list", ListView)
+        results.index = 1
+        results.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert screen.selected_native == "team/reviewer"
+        assert screen.query_one("#spawn-agent-name", Input).value == "Reviewer"
+        assert screen.query_one("#spawn-agent-name", Input).has_focus
 
 
 @pytest.mark.asyncio
@@ -460,6 +490,57 @@ def test_new_command_autocompletes_configured_runtime() -> None:
     )
 
     assert app._complete("/new molly w") == [("work-agent", "agent runtime")]
+
+
+def test_new_command_completes_quoted_native_id(monkeypatch, tmp_path: Path) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    native = NativeAgent(
+        "kiro",
+        "team/code reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / "reviewer.json",
+        True,
+    )
+    monkeypatch.setattr(
+        app.manager,
+        "native_agents",
+        lambda _path: NativeAgentCatalog((native,)),
+    )
+
+    assert app._complete(f"/new molly kiro {tmp_path} --agent ") == [
+        ("'team/code reviewer'", "Checks changes")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_command_launches_discovered_native_agent(monkeypatch, tmp_path: Path) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    native = NativeAgent(
+        "kiro",
+        "team/code reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / "reviewer.json",
+        True,
+    )
+    calls: list[tuple[str, Path, str, str]] = []
+    monkeypatch.setattr(
+        app.manager,
+        "native_agents",
+        lambda _path: NativeAgentCatalog((native,)),
+    )
+    monkeypatch.setattr(
+        app,
+        "_spawn",
+        lambda name, path, provider, native_id: calls.append((name, path, provider, native_id)),
+    )
+
+    await app._run_local_command(f"/new molly kiro {tmp_path} --agent 'team/code reviewer'")
+
+    assert calls == [("molly", tmp_path, "kiro", "team/code reviewer")]
 
 
 @pytest.mark.asyncio

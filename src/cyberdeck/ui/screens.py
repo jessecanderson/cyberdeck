@@ -1,6 +1,12 @@
 """Compatibility exports for Cyberdeck's focused UI screen modules."""
 
-from .agents import AgentSwitcher, DispatchScreen, OperativeControl, RestoreScreen, SpawnAgent
+from .agents import (
+    AgentSwitcher,
+    DispatchScreen,
+    OperativeControl,
+    RestoreScreen,
+    SpawnAgent,
+)
 from .common import AboutScreen, ConfirmScreen, HelpScreen, ThemeScreen
 from .transcript import (
     ApprovalMessage,

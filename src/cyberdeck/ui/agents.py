@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
@@ -11,16 +13,32 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView, Static
 
 from ..domain import AgentState, AgentStatus, ThreadSummary
+from ..native_agents import NativeAgent, NativeAgentCatalog, discover_native_agents
 from ..runtimes import RuntimePreflight
 
 
-class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
-    BINDINGS: ClassVar = [("escape", "cancel", "Cancel")]
+@dataclass(frozen=True, slots=True)
+class SpawnRequest:
+    callsign: str
+    workspace: Path
+    runtime: str
+    native_agent: str | None = None
+
+
+class SpawnAgent(ModalScreen[SpawnRequest | None]):
+    BINDINGS: ClassVar = [
+        ("escape", "cancel", "Cancel"),
+        Binding("down", "next_native", "Next agent", show=False, priority=True),
+        Binding("up", "previous_native", "Previous agent", show=False, priority=True),
+        Binding("enter", "confirm", "Select / launch", show=False, priority=True),
+    ]
 
     def __init__(
         self,
         runtimes: tuple[RuntimePreflight, ...] = (),
         default_runtime: str = "codex",
+        *,
+        catalog_loader: Callable[[Path], NativeAgentCatalog] = discover_native_agents,
     ) -> None:
         super().__init__()
         self.runtimes = runtimes or (
@@ -28,6 +46,12 @@ class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
             RuntimePreflight("kiro", "Kiro", True, "built-in"),
         )
         self.default_runtime = default_runtime
+        self.catalog_loader = catalog_loader
+        self.catalog = NativeAgentCatalog()
+        self._catalog_workspace: Path | None = None
+        self.filtered: list[NativeAgent | None] = [None]
+        self.selected_native: str | None = None
+        self._prefilled_callsign: str | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="spawn-dialog"):
@@ -41,19 +65,101 @@ class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
                 placeholder="Runtime ID",
                 id="spawn-provider",
             )
-            yield Static(
-                "\n".join(
-                    f"{'●' if row.available else '×'} {row.runtime_id:<12} "
-                    f"{row.label} // {row.version or row.detail}"
-                    for row in self.runtimes
-                ),
-                id="spawn-runtimes",
-            )
+            yield Input(placeholder="Search harness-native agents", id="spawn-native-search")
+            yield ListView(id="spawn-native-list")
             yield Static(
                 f"ENTER  JACK IN   •   DEFAULT {self.default_runtime.upper()}   •   ESC  ABORT",
                 classes="modal-help",
                 id="spawn-help",
             )
+
+    def on_mount(self) -> None:
+        self._refresh_catalog()
+
+    @on(Input.Changed, "#spawn-agent-path, #spawn-provider, #spawn-native-search")
+    def refresh_native_agents(self, event: Input.Changed) -> None:
+        self._refresh_catalog(refresh_discovery=event.input.id == "spawn-agent-path")
+
+    def _refresh_catalog(self, *, refresh_discovery: bool = True) -> None:
+        workspace = Path(self.query_one("#spawn-agent-path", Input).value).expanduser()
+        if refresh_discovery and workspace != self._catalog_workspace:
+            self.catalog = (
+                self.catalog_loader(workspace) if workspace.is_dir() else NativeAgentCatalog()
+            )
+            self._catalog_workspace = workspace
+        runtime = self.query_one("#spawn-provider", Input).value.strip().casefold()
+        term = self.query_one("#spawn-native-search", Input).value.casefold()
+        rows = [
+            row
+            for row in self.catalog.agents
+            if row.runtime_id == runtime
+            and term in f"{row.native_id} {row.display_name} {row.description}".casefold()
+        ]
+        self.filtered = [None, *rows]
+        view = self.query_one("#spawn-native-list", ListView)
+        view.clear()
+        runtime_row = next((row for row in self.runtimes if row.runtime_id == runtime), None)
+        default_marker = "●" if runtime_row and runtime_row.available else "×"
+        if runtime_row is None:
+            default_detail = "UNKNOWN RUNTIME"
+        elif runtime_row.available:
+            default_detail = "provider-owned defaults"
+        else:
+            default_detail = f"RUNTIME UNAVAILABLE // {runtime_row.detail}"
+        view.append(ListItem(Label(f"{default_marker} DEFAULT HARNESS  // {default_detail}")))
+        for row in rows:
+            marker = "VIEW ONLY" if not row.launch_supported else row.scope.upper()
+            view.append(
+                ListItem(
+                    Label(
+                        f"○ {row.display_name}  [{marker}]\n   {row.native_id} // {row.description}"
+                    )
+                )
+            )
+        view.index = 0
+        self.selected_native = None
+        self.query_one("#spawn-help", Static).update(
+            f"ENTER  JACK IN   •   DEFAULT {self.default_runtime.upper()}   •   ESC  ABORT"
+        )
+        diagnostics = [row for row in self.catalog.diagnostics if row.runtime_id == runtime]
+        if diagnostics:
+            self.query_one("#spawn-help", Static).update(
+                f"CATALOG // {len(diagnostics)} INVALID DEFINITION(S) SKIPPED"
+            )
+
+    def action_next_native(self) -> None:
+        view = self.query_one("#spawn-native-list", ListView)
+        view.index = min((view.index or 0) + 1, len(self.filtered) - 1)
+
+    def action_previous_native(self) -> None:
+        view = self.query_one("#spawn-native-list", ListView)
+        view.index = max((view.index or 0) - 1, 0)
+
+    @on(ListView.Selected, "#spawn-native-list")
+    def select_native(self, event: ListView.Selected) -> None:
+        index = event.list_view.index
+        self._select_native(index)
+
+    def _select_native(self, index: int | None) -> None:
+        row = self.filtered[index] if index is not None else None
+        if row is not None and not row.launch_supported:
+            self.query_one("#spawn-help", Static).update(f"VIEW ONLY // {row.unavailable_reason}")
+            return
+        self.selected_native = row.native_id if row else None
+        name = self.query_one("#spawn-agent-name", Input)
+        if row is not None and (not name.value or name.value == self._prefilled_callsign):
+            name.value = row.display_name
+            self._prefilled_callsign = row.display_name
+        name.focus()
+
+    def action_confirm(self) -> None:
+        if self.focused in {
+            self.query_one("#spawn-native-search", Input),
+            self.query_one("#spawn-native-list", ListView),
+        }:
+            self._select_native(self.query_one("#spawn-native-list", ListView).index)
+        else:
+            self.submit()
 
     @on(Input.Submitted)
     def submit(self) -> None:
@@ -74,7 +180,7 @@ class SpawnAgent(ModalScreen[tuple[str, Path, str] | None]):
         if not runtime.available:
             self.query_one("#spawn-help", Static).update(f"RUNTIME UNAVAILABLE // {runtime.detail}")
             return
-        self.dismiss((name, path, provider))
+        self.dismiss(SpawnRequest(name, path, provider, self.selected_native))
 
     def action_cancel(self) -> None:
         self.dismiss(None)

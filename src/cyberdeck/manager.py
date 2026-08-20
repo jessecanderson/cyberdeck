@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
+from typing import Literal
 
 from .domain import (
     AgentCapabilities,
@@ -16,8 +17,11 @@ from .domain import (
     TranscriptEntry,
 )
 from .event_reducer import apply_agent_event
+from .native_agents import NativeAgentCatalog, discover_native_agents
 from .providers import AgentAdapter, AgentEvent
 from .runtimes import RuntimePreflight, RuntimeRegistry
+
+PromptDisposition = Literal["sent", "steered", "queued"]
 
 
 class AgentManager:
@@ -31,6 +35,7 @@ class AgentManager:
         self.agents: list[AgentState] = []
         self._adapters: dict[str, AgentAdapter] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._send_tasks: dict[str, asyncio.Task[None]] = {}
         self._on_event = on_event
         self.runtime_registry = runtime_registry or RuntimeRegistry()
         self._adapter_factories: dict[str, Callable[[], AgentAdapter]] = {}
@@ -73,10 +78,15 @@ class AgentManager:
             )
         return tuple(rows[runtime_id] for runtime_id in self.available_providers)
 
-    def _new_adapter(self, provider: str) -> AgentAdapter:
+    def native_agents(self, working_directory: Path) -> NativeAgentCatalog:
+        return discover_native_agents(working_directory)
+
+    def _new_adapter(self, provider: str, native_agent: str | None = None) -> AgentAdapter:
         provider = provider.casefold()
         factory = self._adapter_factories.get(provider)
-        return factory() if factory else self.runtime_registry.create(provider)
+        if factory:
+            return factory()
+        return self.runtime_registry.create(provider, native_agent)
 
     def register(
         self,
@@ -84,6 +94,7 @@ class AgentManager:
         working_directory: Path,
         *,
         provider: str = "codex",
+        native_agent: str | None = None,
         status: AgentStatus = AgentStatus.STARTING,
     ) -> AgentState:
         if any(agent.config.name.casefold() == name.strip().casefold() for agent in self.agents):
@@ -96,6 +107,7 @@ class AgentManager:
                 name=name,
                 working_directory=working_directory.resolve(),
                 provider=provider,
+                native_agent=native_agent,
             ),
             status=status,
             model_provider=provider,
@@ -121,7 +133,7 @@ class AgentManager:
         return rows
 
     async def connect(self, state: AgentState) -> None:
-        adapter = self._new_adapter(state.config.provider)
+        adapter = self._new_adapter(state.config.provider, state.config.native_agent)
         self.attach_adapter(state, adapter)
         try:
             await adapter.start(state.config.working_directory, state.config.name)
@@ -187,9 +199,14 @@ class AgentManager:
         await adapter.stop()
 
     async def spawn(
-        self, name: str, working_directory: Path, *, provider: str = "codex"
+        self,
+        name: str,
+        working_directory: Path,
+        *,
+        provider: str = "codex",
+        native_agent: str | None = None,
     ) -> AgentState:
-        state = self.register(name, working_directory, provider=provider)
+        state = self.register(name, working_directory, provider=provider, native_agent=native_agent)
         await self.connect(state)
         return state
 
@@ -222,6 +239,44 @@ class AgentManager:
             state.current_activity = "transmission failed"
             state.error_message = str(exc)
             raise
+
+    async def submit_prompt(self, state: AgentState, prompt: str) -> PromptDisposition:
+        """Send, steer, or queue operator input according to provider capability."""
+        if state.status is AgentStatus.READY:
+            await self.send(state, prompt)
+            return "sent"
+        if state.status in {
+            AgentStatus.PROCESSING,
+            AgentStatus.EXECUTING,
+            AgentStatus.EDITING,
+            AgentStatus.FIREWALL_HOLD,
+        }:
+            if state.capabilities.steering:
+                await self.steer(state, prompt)
+                return "steered"
+            state.queued_prompts.append(prompt)
+            self._on_event(state, AgentEvent("prompt_queued", prompt))
+            return "queued"
+        raise ValueError(
+            f"{state.config.name} is {state.status.value.upper()}; cannot accept input"
+        )
+
+    async def steer(self, state: AgentState, prompt: str) -> None:
+        if not state.capabilities.steering:
+            raise ValueError(f"{state.config.provider} does not support active-turn steering")
+        entry = TranscriptEntry("user", prompt)
+        state.transcript.append(entry)
+        try:
+            steer = getattr(self.adapter_for(state), "steer", None)
+            if not callable(steer):
+                raise TypeError(
+                    f"{state.config.provider} advertised steering without implementing it"
+                )
+            await steer(prompt)
+        except Exception:
+            state.transcript.remove(entry)
+            raise
+        self._on_event(state, AgentEvent("user_submitted", prompt, method="turn/steer"))
 
     async def rename(self, state: AgentState, name: str) -> None:
         if not state.capabilities.rename:
@@ -264,6 +319,11 @@ class AgentManager:
 
     async def _remove(self, state: AgentState) -> None:
         key = str(state.config.id)
+        send_task = self._send_tasks.pop(key, None)
+        if send_task:
+            send_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await send_task
         await self._cancel_pump(key)
         adapter = self._adapters.pop(key, None)
         try:
@@ -375,7 +435,7 @@ class AgentManager:
         return list(await asyncio.gather(*(respond(approval) for approval in pending)))
 
     async def shutdown(self) -> None:
-        tasks = tuple(self._tasks.values())
+        tasks = (*self._tasks.values(), *self._send_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
@@ -389,6 +449,18 @@ class AgentManager:
             async for event in adapter.events():
                 apply_agent_event(state, event)
                 self._on_event(state, event)
+                if state.status is AgentStatus.READY and state.queued_prompts:
+                    prompt = state.queued_prompts.pop(0)
+                    # Reserve the agent synchronously before yielding to the queued
+                    # send task, so another UI submission cannot start a parallel turn.
+                    state.status = AgentStatus.PROCESSING
+                    state.current_activity = "dispatching queued input"
+                    key = str(state.config.id)
+                    task = asyncio.create_task(self._send_queued(state, prompt))
+                    self._send_tasks[key] = task
+                    task.add_done_callback(
+                        lambda done, agent_key=key: self._send_task_done(agent_key, done)
+                    )
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -396,3 +468,17 @@ class AgentManager:
             state.current_activity = "event pump failed"
             state.error_message = str(exc)
             self._on_event(state, AgentEvent("error", f"event pump failed: {exc}"))
+
+    async def _send_queued(self, state: AgentState, prompt: str) -> None:
+        try:
+            await self.send(state, prompt)
+        except Exception as exc:  # noqa: BLE001 - queued sends become per-agent errors
+            state.queued_prompts.insert(0, prompt)
+            state.status = AgentStatus.ERROR
+            state.current_activity = "queued transmission failed"
+            state.error_message = str(exc)
+            self._on_event(state, AgentEvent("error", f"queued transmission failed: {exc}"))
+
+    def _send_task_done(self, key: str, task: asyncio.Task[None]) -> None:
+        if self._send_tasks.get(key) is task:
+            self._send_tasks.pop(key, None)

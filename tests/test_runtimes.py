@@ -66,3 +66,36 @@ def test_registry_passes_validated_codex_policy_to_adapter(
     assert isinstance(adapter, CodexAppServerAdapter)
     assert adapter.approval_policy == "never"
     assert adapter.sandbox == "read-only"
+
+
+def test_registry_constructs_exact_kiro_native_agent_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        RuntimeRegistry, "_find_executable", staticmethod(lambda _name: "/opt/bin/kiro-cli")
+    )
+
+    default = RuntimeRegistry().create("kiro")
+    selected = RuntimeRegistry().create("kiro", "security/reviewer")
+
+    assert default.command == ("/opt/bin/kiro-cli", "acp")
+    assert selected.command == (
+        "/opt/bin/kiro-cli",
+        "acp",
+        "--agent",
+        "security/reviewer",
+    )
+
+
+def test_registry_rejects_native_agent_for_unsupported_runtimes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(RuntimeRegistry, "_find_executable", staticmethod(lambda name: name))
+
+    with pytest.raises(ValueError, match="view only"):
+        RuntimeRegistry().create("codex", "reviewer")
+    registry = RuntimeRegistry(
+        (RuntimeConfig("work-agent", "Work ACP", (sys.executable, "agent.py")),)
+    )
+    with pytest.raises(ValueError, match="does not support"):
+        registry.create("work-agent", "reviewer")

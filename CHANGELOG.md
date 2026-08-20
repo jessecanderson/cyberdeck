@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Accept follow-up input while agents work: steer active Codex turns immediately and
+  queue ACP prompts until the selected uplink returns to ready.
+- Show Codex-provided per-turn token usage after each completed request without
+  estimating monetary or workspace-credit cost.
+- Discover harness-native Codex and Kiro agent identity metadata in New Uplink, with
+  workspace-aware Kiro launch through `/new ... --agent NATIVE` and view-only Codex
+  entries until App Server supports named primary-agent selection.
+
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 

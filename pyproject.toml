@@ -28,6 +28,7 @@ classifiers = [
 ]
 dependencies = [
   "packaging>=24.2,<27",
+  "PyYAML>=6.0.2,<7",
   "textual>=8.2,<9",
 ]
 

@@ -66,9 +66,14 @@ class RuntimeRegistry:
         except KeyError as exc:
             raise ValueError(f"Unknown agent runtime: {runtime_id}") from exc
 
-    def create(self, runtime_id: str) -> AgentAdapter:
+    def create(self, runtime_id: str, native_agent: str | None = None) -> AgentAdapter:
         definition = self.definition(runtime_id)
         if definition.kind == "codex":
+            if native_agent is not None:
+                raise ValueError(
+                    "Codex native agents are view only: App Server does not support "
+                    "named primary-agent selection"
+                )
             executable = self._resolve_executable(definition.command[0])
             return CodexAppServerAdapter(
                 executable,
@@ -76,7 +81,9 @@ class RuntimeRegistry:
                 sandbox=self.sandbox,
             )
         if definition.kind == "kiro":
-            return KiroAcpAdapter(self._resolve_executable(definition.command[0]))
+            return KiroAcpAdapter(self._resolve_executable(definition.command[0]), native_agent)
+        if native_agent is not None:
+            raise ValueError(f"Runtime {definition.id} does not support native-agent launch")
         command = (self._resolve_executable(definition.command[0]), *definition.command[1:])
         environment = None
         if definition.environment_allowlist:

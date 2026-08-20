@@ -56,24 +56,30 @@ def _new(app: CyberdeckApp, args: list[str], _command: str) -> None:
     if not args:
         app.action_spawn_agent()
         return
-    if len(args) > 3:
-        app._write_local("usage: /new CALLSIGN [RUNTIME] [PATH]")
+    usage = "usage: /new CALLSIGN [RUNTIME] [PATH] [--agent NATIVE]"
+    if args[0].startswith("--"):
+        app._write_local(usage)
         return
+    parsed = _parse_new_options(args[1:])
+    if parsed is None:
+        app._write_local(usage)
+        return
+    positional, native_agent = parsed
 
     provider = app.deck_config.default_runtime
     path_arg: str | None = None
-    if len(args) == 2:
-        if args[1].casefold() in app.manager.available_providers:
-            provider = args[1].casefold()
+    if len(positional) == 1:
+        if positional[0].casefold() in app.manager.available_providers:
+            provider = positional[0].casefold()
         else:
-            path_arg = args[1]
-    elif len(args) == 3:
-        if args[1].casefold() in app.manager.available_providers:
-            provider, path_arg = args[1].casefold(), args[2]
-        elif args[2].casefold() in app.manager.available_providers:
-            path_arg, provider = args[1], args[2].casefold()
+            path_arg = positional[0]
+    elif len(positional) == 2:
+        if positional[0].casefold() in app.manager.available_providers:
+            provider, path_arg = positional[0].casefold(), positional[1]
+        elif positional[1].casefold() in app.manager.available_providers:
+            path_arg, provider = positional[0], positional[1].casefold()
         else:
-            app._write_local("usage: /new CALLSIGN [RUNTIME] [PATH]")
+            app._write_local(usage)
             return
 
     default_path = app.deck_config.workspace_root or Path.cwd()
@@ -83,9 +89,48 @@ def _new(app: CyberdeckApp, args: list[str], _command: str) -> None:
             f"unknown runtime: {provider} // choose " + ", ".join(app.manager.available_providers)
         )
     elif path.is_dir():
-        app._spawn(args[0], path, provider)
+        if native_agent is not None:
+            match = next(
+                (
+                    row
+                    for row in app.manager.native_agents(path).agents
+                    if row.runtime_id == provider and row.native_id == native_agent
+                ),
+                None,
+            )
+            if match is None:
+                app._write_local(f"unknown native agent for {provider}: {native_agent}")
+                return
+            if not match.launch_supported:
+                app._write_local(f"VIEW ONLY // {match.unavailable_reason}")
+                return
+        if native_agent is None:
+            app._spawn(args[0], path, provider)
+        else:
+            app._spawn(args[0], path, provider, native_agent)
     else:
         app._write_local(f"path not found: {path}")
+
+
+def _parse_new_options(tokens: list[str]) -> tuple[list[str], str | None] | None:
+    native_agent: str | None = None
+    positional: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--agent":
+            if native_agent is not None or index + 1 >= len(tokens):
+                return None
+            native_agent = tokens[index + 1]
+            if not native_agent or native_agent.startswith("--"):
+                return None
+            index += 2
+        elif token.startswith("--"):
+            return None
+        else:
+            positional.append(token)
+            index += 1
+    return (positional, native_agent) if len(positional) <= 2 else None
 
 
 def _agents(app: CyberdeckApp, _args: list[str], _command: str) -> None:

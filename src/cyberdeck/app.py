@@ -497,16 +497,19 @@ class CyberdeckApp(App[None]):
             SpawnAgent(
                 self.manager.runtime_preflights(),
                 self.deck_config.default_runtime,
+                catalog_loader=self.manager.native_agents,
             ),
             self._spawn_result,
         )
 
     def _spawn_result(self, result):
         if result:
-            self._spawn(*result)
+            self._spawn(result.callsign, result.workspace, result.runtime, result.native_agent)
 
     @work(exclusive=False)
-    async def _spawn(self, name: str, path: Path, provider: str = "codex") -> None:
+    async def _spawn(
+        self, name: str, path: Path, provider: str = "codex", native_agent: str | None = None
+    ) -> None:
         preflight = next(
             (row for row in self.manager.runtime_preflights() if row.runtime_id == provider),
             None,
@@ -515,7 +518,7 @@ class CyberdeckApp(App[None]):
             self._write_local(f"runtime unavailable: {provider} // {preflight.detail}")
             return
         try:
-            state = self.manager.register(name, path, provider=provider)
+            state = self.manager.register(name, path, provider=provider, native_agent=native_agent)
         except ValueError as exc:
             self._write_local(str(exc))
             return
@@ -631,13 +634,14 @@ class CyberdeckApp(App[None]):
         if not state:
             self._write_local("No active uplink. Use /new or /restore.")
             return
-        if state.status is not AgentStatus.READY:
-            self._write_local(
-                f"{state.config.name} is {state.status.value.upper()}; wait for READY"
-            )
-            return
         try:
-            await self.manager.send(state, prompt)
+            disposition = await self.manager.submit_prompt(state, prompt)
+            if disposition == "queued":
+                self._write_local(
+                    f"QUEUED FOR {state.config.name.upper()} // {len(state.queued_prompts)} pending"
+                )
+            elif disposition == "steered":
+                self._write_local(f"STEERING ACCEPTED // {state.config.name.upper()}")
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"TRANSMISSION FAILED // {exc}\nRECOVERY AVAILABLE // run /retry")
         self._refresh_all()

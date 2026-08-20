@@ -45,6 +45,8 @@ class CodexAppServerAdapter:
         self.process: asyncio.subprocess.Process | None = None
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
+        self._active_turn_ready = asyncio.Event()
+        self._turn_starting = False
         self._next_id = 1
         self._pending: dict[int, asyncio.Future[dict[str, Any]]] = {}
         self._events: asyncio.Queue[AgentEvent | None] = asyncio.Queue()
@@ -64,6 +66,7 @@ class CodexAppServerAdapter:
             tool_events=True,
             model_selection=True,
             context_compaction=True,
+            steering=True,
         )
         self._intentional_shutdown = False
         self._transport_failure_reported = False
@@ -197,14 +200,24 @@ class CodexAppServerAdapter:
     async def send(self, prompt: str) -> None:
         if not self.thread_id:
             raise CodexProtocolError("Agent has not started")
-        result = await self._request(
-            "turn/start",
-            {
-                "threadId": self.thread_id,
-                "input": [{"type": "text", "text": prompt, "text_elements": []}],
-            },
-        )
-        self.active_turn_id = result.get("turn", {}).get("id")
+        self._active_turn_ready.clear()
+        self._turn_starting = True
+        try:
+            result = await self._request(
+                "turn/start",
+                {
+                    "threadId": self.thread_id,
+                    "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                },
+            )
+            self.active_turn_id = result.get("turn", {}).get("id")
+            if not self.active_turn_id:
+                raise CodexProtocolError("turn/start response did not include a turn id")
+            self._active_turn_ready.set()
+        finally:
+            self._turn_starting = False
+            if not self.active_turn_id:
+                self._active_turn_ready.set()
         await self._events.put(AgentEvent("status", "processing"))
 
     async def interrupt_turn(self) -> None:
@@ -215,6 +228,26 @@ class CodexAppServerAdapter:
             {"threadId": self.thread_id, "turnId": self.active_turn_id},
         )
         self.active_turn_id = None
+        self._active_turn_ready.clear()
+
+    async def steer(self, prompt: str) -> None:
+        if not self.thread_id:
+            raise CodexProtocolError("Agent has no active turn to steer")
+        if not self.active_turn_id and self._turn_starting:
+            try:
+                await asyncio.wait_for(self._active_turn_ready.wait(), timeout=self.request_timeout)
+            except TimeoutError as exc:
+                raise CodexProtocolError("Timed out waiting for the active turn to steer") from exc
+        if not self.active_turn_id:
+            raise CodexProtocolError("Agent has no active turn to steer")
+        await self._request(
+            "turn/steer",
+            {
+                "threadId": self.thread_id,
+                "input": [{"type": "text", "text": prompt, "text_elements": []}],
+                "expectedTurnId": self.active_turn_id,
+            },
+        )
 
     async def compact_context(self) -> None:
         if not self.thread_id:
@@ -241,6 +274,8 @@ class CodexAppServerAdapter:
 
     async def stop(self) -> None:
         self._intentional_shutdown = True
+        self._turn_starting = False
+        self._active_turn_ready.set()
         process = self.process
         if process and process.returncode is None:
             process.terminate()
@@ -339,6 +374,8 @@ class CodexAppServerAdapter:
         if self._transport_failure_reported:
             return
         self._transport_failure_reported = True
+        self._turn_starting = False
+        self._active_turn_ready.set()
         error = CodexProtocolError(reason)
         fail_pending(self._pending, error)
         if self._compaction_done and not self._compaction_done.done():
@@ -381,4 +418,5 @@ class CodexAppServerAdapter:
             await self._events.put(AgentEvent("token_usage", params=params))
         elif method == "turn/completed":
             self.active_turn_id = None
+            self._active_turn_ready.clear()
             await self._events.put(AgentEvent("status", "ready"))

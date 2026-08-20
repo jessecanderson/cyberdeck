@@ -27,7 +27,9 @@ class CommandSpec:
 
 
 BUILTIN_COMMANDS = (
-    CommandSpec("/new", "new uplink: /new CALLSIGN [RUNTIME] [PATH]", append_space=True),
+    CommandSpec(
+        "/new", "new uplink: /new CALLSIGN [RUNTIME] [PATH] [--agent NATIVE]", append_space=True
+    ),
     CommandSpec("/runtimes", "show runtime availability and versions"),
     CommandSpec("/restore", "open Archive Uplink"),
     CommandSpec("/agents", "list connected uplinks"),

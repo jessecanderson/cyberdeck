@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from shlex import quote
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -121,6 +122,40 @@ def _approval(_app: CyberdeckApp, value: str, words: list[str]) -> CompletionRes
 def _runtime(app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult:
     if not words or words[0] != "/new":
         return None
+    if "--agent" in words:
+        marker = words.index("--agent")
+        if len(words) == marker + 1 and value.endswith(" "):
+            prefix = ""
+        elif len(words) == marker + 2 and not value.endswith(" "):
+            prefix = words[-1].casefold()
+        else:
+            return []
+        before = words[1:marker]
+        provider = next(
+            (
+                part.casefold()
+                for part in before
+                if part.casefold() in app.manager.available_providers
+            ),
+            app.deck_config.default_runtime,
+        )
+        path_token = next(
+            (part for part in before[1:] if part.casefold() not in app.manager.available_providers),
+            None,
+        )
+        workspace = (
+            Path(path_token).expanduser().resolve()
+            if path_token
+            else (app.deck_config.workspace_root or Path.cwd())
+        )
+        return [
+            (
+                quote(row.native_id),
+                row.description if row.launch_supported else f"VIEW ONLY: {row.unavailable_reason}",
+            )
+            for row in app.manager.native_agents(workspace).agents
+            if row.runtime_id == provider and row.native_id.casefold().startswith(prefix)
+        ]
     prefix: str | None = None
     if len(words) == 2 and value.endswith(" "):
         prefix = ""

@@ -206,6 +206,7 @@ The canonical `/new` form puts the runtime before the optional path:
 /new ghost /path/to/project
 /new ghost codex /path/to/project
 /new ghost kiro /path/to/project
+/new wintermute kiro /path/to/project --agent security/reviewer
 ```
 
 Both runtime and path are optional. The configured default runtime (`codex` on

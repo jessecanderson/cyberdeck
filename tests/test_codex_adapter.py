@@ -287,6 +287,59 @@ async def test_token_usage_notification_becomes_agent_event() -> None:
 
 
 @pytest.mark.asyncio
+async def test_steer_targets_the_active_codex_turn() -> None:
+    adapter = CodexAppServerAdapter()
+    writer = Writer()
+    adapter.process = type("Process", (), {"stdin": writer})()
+    adapter.thread_id = "thread-1"
+    adapter.active_turn_id = "turn-7"
+
+    task = asyncio.create_task(adapter.steer("Focus on the failing tests."))
+    await asyncio.sleep(0)
+
+    assert json.loads(writer.data) == {
+        "id": 1,
+        "method": "turn/steer",
+        "params": {
+            "threadId": "thread-1",
+            "input": [
+                {
+                    "type": "text",
+                    "text": "Focus on the failing tests.",
+                    "text_elements": [],
+                }
+            ],
+            "expectedTurnId": "turn-7",
+        },
+    }
+    adapter._pending[1].set_result({"turnId": "turn-7"})
+    await task
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_start_wakes_pending_steering() -> None:
+    release = asyncio.Event()
+    adapter = CodexAppServerAdapter(request_timeout=1)
+    adapter.thread_id = "thread-1"
+
+    async def fail_start(_method, _params):
+        await release.wait()
+        raise RuntimeError("turn rejected")
+
+    adapter._request = fail_start
+    send_task = asyncio.create_task(adapter.send("start"))
+    await asyncio.sleep(0)
+    steer_task = asyncio.create_task(adapter.steer("follow up"))
+    await asyncio.sleep(0)
+    release.set()
+
+    with pytest.raises(RuntimeError, match="turn rejected"):
+        await send_task
+    with pytest.raises(CodexProtocolError, match="no active turn"):
+        await steer_task
+
+
+@pytest.mark.asyncio
 async def test_agent_message_delta_preserves_item_identity() -> None:
     adapter = CodexAppServerAdapter()
     await adapter._handle_notification(
