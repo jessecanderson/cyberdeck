@@ -18,6 +18,10 @@ class AgentEvent:
     message_id: str | None = None
 
 
+class SteeringNotSent(RuntimeError):
+    """The adapter can prove that steering input was not submitted."""
+
+
 class AgentAdapter(Protocol):
     thread_id: str | None
     model: str | None

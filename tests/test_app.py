@@ -39,6 +39,7 @@ from cyberdeck.domain import (
 )
 from cyberdeck.manager import AgentManager
 from cyberdeck.module_registry import ModuleRegistry
+from cyberdeck.native_agents import NativeAgent, NativeAgentCatalog
 from cyberdeck.providers import AgentEvent
 from cyberdeck.runtimes import RuntimePreflight, RuntimeRegistry
 from cyberdeck.ui.command_palette import CommandPalette
@@ -231,6 +232,35 @@ async def test_spawn_agent_inputs_are_visible_and_accept_text() -> None:
         name.focus()
         await pilot.press("g", "h", "o", "s", "t")
         assert name.value == "ghost"
+
+
+@pytest.mark.asyncio
+async def test_spawn_list_enter_selects_highlighted_native_agent(tmp_path: Path) -> None:
+    native = NativeAgent(
+        "kiro",
+        "team/reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / ".kiro" / "agents" / "team" / "reviewer.json",
+        True,
+    )
+    catalog = NativeAgentCatalog((native,))
+    runtimes = (RuntimePreflight("kiro", "Kiro", True, "ready"),)
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        pilot.app.push_screen(SpawnAgent(runtimes, "kiro", catalog_loader=lambda _path: catalog))
+        await pilot.pause()
+        screen = pilot.app.screen
+        results = screen.query_one("#spawn-native-list", ListView)
+        results.index = 1
+        results.focus()
+
+        await pilot.press("enter")
+        await pilot.pause()
+
+        assert screen.selected_native == "team/reviewer"
+        assert screen.query_one("#spawn-agent-name", Input).value == "Reviewer"
+        assert screen.query_one("#spawn-agent-name", Input).has_focus
 
 
 @pytest.mark.asyncio
@@ -460,6 +490,57 @@ def test_new_command_autocompletes_configured_runtime() -> None:
     )
 
     assert app._complete("/new molly w") == [("work-agent", "agent runtime")]
+
+
+def test_new_command_completes_quoted_native_id(monkeypatch, tmp_path: Path) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    native = NativeAgent(
+        "kiro",
+        "team/code reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / "reviewer.json",
+        True,
+    )
+    monkeypatch.setattr(
+        app.manager,
+        "native_agents",
+        lambda _path: NativeAgentCatalog((native,)),
+    )
+
+    assert app._complete(f"/new molly kiro {tmp_path} --agent ") == [
+        ("'team/code reviewer'", "Checks changes")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_new_command_launches_discovered_native_agent(monkeypatch, tmp_path: Path) -> None:
+    app = CyberdeckApp(skip_boot=True)
+    native = NativeAgent(
+        "kiro",
+        "team/code reviewer",
+        "Reviewer",
+        "Checks changes",
+        "workspace",
+        tmp_path / "reviewer.json",
+        True,
+    )
+    calls: list[tuple[str, Path, str, str]] = []
+    monkeypatch.setattr(
+        app.manager,
+        "native_agents",
+        lambda _path: NativeAgentCatalog((native,)),
+    )
+    monkeypatch.setattr(
+        app,
+        "_spawn",
+        lambda name, path, provider, native_id: calls.append((name, path, provider, native_id)),
+    )
+
+    await app._run_local_command(f"/new molly kiro {tmp_path} --agent 'team/code reviewer'")
+
+    assert calls == [("molly", tmp_path, "kiro", "team/code reviewer")]
 
 
 @pytest.mark.asyncio
@@ -1435,9 +1516,14 @@ async def test_background_unread_count_tracks_messages_not_protocol_events() -> 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["error", "transport_closed"])
-async def test_agent_failure_shows_reason_and_retry_instruction(kind: str) -> None:
+@pytest.mark.parametrize("restorable", [False, True])
+async def test_agent_failure_shows_reason_and_retry_instruction(
+    kind: str, restorable: bool
+) -> None:
     async with CyberdeckApp(skip_boot=True).run_test() as pilot:
         state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.READY)
+        state.capabilities = AgentCapabilities(load_session=restorable)
+        state.thread_id = "thread" if restorable else None
         await pilot.app._add_agent_item(state, select=True)
 
         pilot.app._agent_event(state, AgentEvent(kind, "Codex app-server closed stdout"))
@@ -1446,7 +1532,8 @@ async def test_agent_failure_shows_reason_and_retry_instruction(kind: str) -> No
         assert notice.role == "system"
         assert "GRID FRACTURE // SIGNAL LOST" in notice.text
         assert "Codex app-server closed stdout" in notice.text
-        assert "RECOVERY AVAILABLE // run /retry" in notice.text
+        assert ("RECOVERY AVAILABLE // run /retry" in notice.text) is restorable
+        assert ("use /new" in notice.text) is not restorable
 
 
 @pytest.mark.asyncio
@@ -1461,4 +1548,49 @@ async def test_background_agent_failure_keeps_recovery_notice_with_owner() -> No
 
         assert not active.transcript
         assert "reader failed" in failed.transcript[-1].text
-        assert "/retry" in failed.transcript[-1].text
+        assert "use /new" in failed.transcript[-1].text
+
+
+@pytest.mark.asyncio
+async def test_composer_binds_target_before_worker_runs_and_preserves_text(monkeypatch):
+    pending = []
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        first = pilot.app.manager.register("first", Path("/tmp"), status=AgentStatus.PROCESSING)
+        second = pilot.app.manager.register("second", Path("/tmp"), status=AgentStatus.READY)
+        await pilot.app.present_agent(first, select=True)
+        await pilot.app.present_agent(second, select=False)
+        await pilot.pause()
+        prompt = pilot.app.query_one("#prompt", PromptEditor)
+        text = "  preserve indentation\nand trailing whitespace  \n"
+        prompt.value = text
+        with monkeypatch.context() as patch:
+            patch.setattr(pilot.app, "run_worker", lambda work, **_kwargs: pending.append(work))
+            await pilot.app.send_prompt(PromptEditor.Submitted(prompt, text))
+        pilot.app._switch_result(second)
+        await pending.pop()
+        assert first.queued_prompts == [text]
+        assert second.queued_prompts == []
+        assert "will continue this thread" in first.transcript[-1].text
+        assert second.transcript == []
+
+
+@pytest.mark.asyncio
+async def test_queue_commands_and_completion_exclude_uncertain_delivery():
+    async with CyberdeckApp(skip_boot=True).run_test() as pilot:
+        state = pilot.app.manager.register("ghost", Path("/tmp"), status=AgentStatus.ERROR)
+        state.queue_paused = True
+        state.queued_prompts = ["unsent"]
+        state.uncertain_prompts = ["possibly delivered"]
+        await pilot.app.present_agent(state, select=True)
+        await pilot.pause()
+        assert [word for word, _ in pilot.app._complete("/queue ")] == [
+            "resume",
+            "clear",
+        ]
+        await pilot.app.execute_command("/queue")
+        assert "UNCERTAIN: possibly delivered" in state.transcript[-1].text
+        await pilot.app.execute_command("/queue resume")
+        assert "requires READY" in state.transcript[-1].text
+        await pilot.app.execute_command("/queue clear")
+        assert state.queued_prompts == state.uncertain_prompts == []
+        assert state.queue_paused

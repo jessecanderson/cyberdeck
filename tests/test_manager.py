@@ -19,6 +19,7 @@ class FakeAdapter:
         self.queue = []
         self.approvals = []
         self.compacted = False
+        self.steered = []
         self.capabilities = AgentCapabilities(
             load_session=True,
             history=True,
@@ -37,6 +38,9 @@ class FakeAdapter:
     async def send(self, prompt):
         if self.fail_send:
             raise RuntimeError("radio failure")
+
+    async def steer(self, prompt):
+        self.steered.append(prompt)
 
     async def set_thread_name(self, thread_id, name):
         self.names.append((thread_id, name))
@@ -164,6 +168,51 @@ async def test_send_announces_user_message_before_provider_finishes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_busy_agent_steers_when_provider_supports_it() -> None:
+    deck = manager()
+    state, adapter = attach(deck, "ghost")
+    state.status = AgentStatus.PROCESSING
+    state.capabilities = AgentCapabilities(steering=True)
+
+    disposition = await deck.submit_prompt(state, "test only the parser")
+
+    assert disposition == "steered"
+    assert adapter.steered == ["test only the parser"]
+    assert state.transcript[-1].text == "test only the parser"
+
+
+@pytest.mark.asyncio
+async def test_busy_agent_queues_when_provider_cannot_steer() -> None:
+    deck = manager()
+    state, _adapter = attach(deck, "wintermute")
+    state.status = AgentStatus.PROCESSING
+    state.capabilities = AgentCapabilities(steering=False)
+
+    disposition = await deck.submit_prompt(state, "follow up when ready")
+
+    assert disposition == "queued"
+    assert state.queued_prompts == ["follow up when ready"]
+
+
+@pytest.mark.asyncio
+async def test_ready_event_reserves_agent_before_queued_send_task_runs() -> None:
+    deck = manager()
+    state, adapter = attach(deck, "wintermute")
+    state.status = AgentStatus.PROCESSING
+    state.queued_prompts.append("follow up when ready")
+    adapter.queue.append(AgentEvent("status", "ready"))
+
+    await deck._pump(state, adapter)
+
+    assert state.status is AgentStatus.PROCESSING
+    assert state.current_activity == "dispatching queued input"
+    assert state.queued_prompts == []
+    await asyncio.sleep(0)
+    assert state.transcript[-1].text == "follow up when ready"
+    await deck.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_connect_uses_registered_provider_factory() -> None:
     kiro_adapter = FakeAdapter()
     kiro_adapter.model_provider = "kiro"
@@ -181,6 +230,22 @@ async def test_connect_uses_registered_provider_factory() -> None:
     assert state.config.provider == "kiro"
     assert state.model_provider == "kiro"
     assert kiro_adapter.started == (state.config.working_directory, "wintermute")
+    await deck.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_native_identifier_preserves_zero_argument_injected_factory() -> None:
+    adapter = FakeAdapter()
+    deck = AgentManager(
+        lambda state, event: None,
+        adapter_factories={"kiro": lambda: adapter},
+    )
+    state = deck.register("wintermute", Path("/tmp"), provider="kiro", native_agent="team/reviewer")
+
+    await deck.connect(state)
+
+    assert deck.adapter_for(state) is adapter
+    assert state.config.native_agent == "team/reviewer"
     await deck.shutdown()
 
 
@@ -437,7 +502,9 @@ async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> N
 
     assert state.transcript == []
     assert state.status is AgentStatus.ERROR
-    assert state.current_activity == "transmission failed"
+    assert "delivery uncertain" in state.current_activity
+    assert state.uncertain_prompts == ["unaccepted prompt"]
+    assert state.queue_paused
     assert state.error_message == "radio failure"
 
 

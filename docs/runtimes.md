@@ -35,6 +35,7 @@ The create dialog and `/new` accept any registered runtime ID:
 /new ghost
 /new wintermute kiro ~/src/project
 /new molly work-agent ~/src/project
+/new wintermute kiro ~/src/project --agent security/reviewer
 ```
 
 Set the default and register another local ACP command in Cyberdeck's
@@ -70,6 +71,68 @@ values are `read-only`, `workspace-write`, and `danger-full-access`. Invalid
 values fall back safely and are reported at startup. Configuration never stores
 provider credentials. File configuration supplies defaults; an explicit
 `/new` path or runtime always wins for that uplink.
+
+### Harness-native agents
+
+New Uplink refreshes agent identity metadata whenever its workspace or runtime changes.
+It reads Codex definitions from `~/.codex/agents/*.toml` and
+`WORKSPACE/.codex/agents/*.toml`, and Kiro definitions recursively from
+`~/.kiro/agents/**/*.{json,md}` and `WORKSPACE/.kiro/agents/**/*.{json,md}`.
+Workspace Kiro definitions override personal definitions with the same relative ID.
+
+Kiro entries can be launched with `--agent NATIVE`; Cyberdeck delegates validation and
+all capabilities to `kiro-cli acp --agent NATIVE`. Codex entries are view-only because
+App Server does not expose named primary-agent selection. The default-harness row keeps
+the ordinary launch behavior. Cyberdeck reads only names and descriptions: plugins,
+skills, MCP servers, hooks, permissions, and credentials remain harness-owned and are
+not imported or persisted.
+
+Harness-native agents and plugins are distinct from Cyberdeck Module API v1. Modules
+extend Cyberdeck itself; native definitions configure the owning provider harness.
+
+### Steering and queued input
+
+Submitting more input while Codex is working steers its active turn through App
+Server. ACP v1 has no equivalent steering request, so Cyberdeck queues additional
+Kiro or generic ACP prompts per uplink and sends them in order whenever that agent
+returns to `READY`, in the same session. Each submission keeps its exact text and
+is bound to the agent selected when Enter is pressed. Steering during an approval
+hold does not approve or bypass the hold. A starting Codex turn waits for its ID
+within the adapter's bounded startup wait.
+
+`/interrupt` pauses pending input and waits for provider turn completion, with a
+30-second cancellation deadline. A failed cancellation stops the affected transport
+and leaves the uplink in `ERROR`. Input entered during cancellation or while paused
+joins the pending queue.
+
+- `/queue` shows confirmed-unsent and uncertain messages.
+- `/queue resume` requires `READY` and resumes only confirmed-unsent messages.
+- `/queue clear` discards pending and uncertain messages; it does not unpause input.
+
+Ambiguous timeouts and transport errors retain the input for review and pause the
+queue. Check the transcript and explicitly resubmit uncertain messages if needed;
+they are never automatically replayed. Steering falls back to a subsequent turn
+only when the adapter can prove it was not sent or accepted, never by matching
+arbitrary error text. Codex currently proves this locally when its active turn ends
+before the steering write; other RPC errors remain uncertain.
+
+`/retry` is available only with session-loading support and an existing thread ID.
+It preserves the runtime's native-agent selection and pending input, cancels old
+connection tasks, and restores the session with the queue paused. Otherwise,
+disconnect and create a new uplink. Explicit targeted sends and dispatch still
+require `READY` and do not resume the queue. Queues are in-memory and are not
+restored after application restart.
+
+ACP initialization retains its 15-second deadline. Session creation, each session
+load attempt, compaction, and transport writes have a 30-second deadline; bounded
+session-lock retries remain in place. Normal ACP prompt responses have no turn
+duration limit. Cancellation has its separate deadline. Timed-out or cancelled
+requests are removed, and late responses are ignored.
+
+When Codex reports per-turn token usage, Cyberdeck adds a concise usage line after
+the turn completes. This includes only fields returned by App Server; Cyberdeck does
+not estimate money or workspace credits from tokens. ACP runtimes show no turn usage
+unless the protocol exposes an equivalent provider-owned event in the future.
 
 Workspace density is a presentation-only preference. `/density compact` or
 `F7` reduces post-boot workspace chrome and spacing; `/density standard`

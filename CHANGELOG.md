@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+## [0.3.7] - 2026-09-11
+
+- Preserve cancellation when transport writes complete concurrently on Python 3.11,
+  preventing a cancelled ACP prompt from waiting indefinitely.
+
+- Keep composer messages bound to the selected conversation; add `/queue` inspection,
+  resume, and clear, with paused cancellation/recovery and no automatic replay of
+  uncertain deliveries. Preserve native-agent identity and pending input on retry.
+- Wait for provider completion after interruption, enforce cancellation deadlines,
+  cancel owned sends on connection replacement, and bound ACP control requests and
+  writes while allowing long-running prompts.
+- Accept follow-up input while agents work: steer active Codex turns immediately and
+  queue ACP prompts until the selected uplink returns to ready.
+- Show Codex-provided per-turn token usage after each completed request without
+  estimating monetary or workspace-credit cost.
+- Discover harness-native Codex and Kiro agent identity metadata in New Uplink, with
+  workspace-aware Kiro launch through `/new ... --agent NATIVE` and view-only Codex
+  entries until App Server supports named primary-agent selection.
+
 All notable changes to Cyberdeck are documented here. The project follows
 [Semantic Versioning](https://semver.org/).
 

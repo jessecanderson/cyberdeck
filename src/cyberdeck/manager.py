@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
-from contextlib import suppress
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
+from typing import Literal
 
 from .domain import (
     AgentCapabilities,
@@ -16,8 +17,11 @@ from .domain import (
     TranscriptEntry,
 )
 from .event_reducer import apply_agent_event
-from .providers import AgentAdapter, AgentEvent
+from .native_agents import NativeAgentCatalog, discover_native_agents
+from .providers import AgentAdapter, AgentEvent, SteeringNotSent
 from .runtimes import RuntimePreflight, RuntimeRegistry
+
+PromptDisposition = Literal["sent", "steered", "queued"]
 
 
 class AgentManager:
@@ -27,10 +31,18 @@ class AgentManager:
         adapter_factory: Callable[[], AgentAdapter] | None = None,
         adapter_factories: dict[str, Callable[[], AgentAdapter]] | None = None,
         runtime_registry: RuntimeRegistry | None = None,
+        cancellation_timeout: float = 30.0,
     ) -> None:
+        if cancellation_timeout <= 0:
+            raise ValueError("Cancellation timeout must be positive")
+        self.cancellation_timeout = cancellation_timeout
+        self._owned: dict[str, set[asyncio.Task]] = {}
+        self._completion: dict[str, asyncio.Event] = {}
+        self._reserved: dict[str, tuple[asyncio.Task[None], str]] = {}
         self.agents: list[AgentState] = []
         self._adapters: dict[str, AgentAdapter] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._send_tasks: dict[str, asyncio.Task[None]] = {}
         self._on_event = on_event
         self.runtime_registry = runtime_registry or RuntimeRegistry()
         self._adapter_factories: dict[str, Callable[[], AgentAdapter]] = {}
@@ -73,10 +85,15 @@ class AgentManager:
             )
         return tuple(rows[runtime_id] for runtime_id in self.available_providers)
 
-    def _new_adapter(self, provider: str) -> AgentAdapter:
+    def native_agents(self, working_directory: Path) -> NativeAgentCatalog:
+        return discover_native_agents(working_directory)
+
+    def _new_adapter(self, provider: str, native_agent: str | None = None) -> AgentAdapter:
         provider = provider.casefold()
         factory = self._adapter_factories.get(provider)
-        return factory() if factory else self.runtime_registry.create(provider)
+        if factory:
+            return factory()
+        return self.runtime_registry.create(provider, native_agent)
 
     def register(
         self,
@@ -84,6 +101,7 @@ class AgentManager:
         working_directory: Path,
         *,
         provider: str = "codex",
+        native_agent: str | None = None,
         status: AgentStatus = AgentStatus.STARTING,
     ) -> AgentState:
         if any(agent.config.name.casefold() == name.strip().casefold() for agent in self.agents):
@@ -96,6 +114,7 @@ class AgentManager:
                 name=name,
                 working_directory=working_directory.resolve(),
                 provider=provider,
+                native_agent=native_agent,
             ),
             status=status,
             model_provider=provider,
@@ -120,15 +139,29 @@ class AgentManager:
             row.is_open = row.id in open_ids
         return rows
 
-    async def connect(self, state: AgentState) -> None:
-        adapter = self._new_adapter(state.config.provider)
-        self.attach_adapter(state, adapter)
+    @asynccontextmanager
+    async def _own_task(self, state: AgentState) -> AsyncIterator[None]:
+        task = asyncio.current_task()
+        assert task is not None
+        owned = self._owned.setdefault(str(state.config.id), set())
+        owned.add(task)
         try:
-            await adapter.start(state.config.working_directory, state.config.name)
-            self._finish_connect(state, adapter)
-        except Exception:
-            await self._failed_connect(state, adapter)
-            raise
+            yield
+        finally:
+            owned.discard(task)
+
+    async def connect(self, state: AgentState) -> None:
+        adapter = self._new_adapter(state.config.provider, state.config.native_agent)
+        self.attach_adapter(state, adapter)
+        async with self._own_task(state):
+            try:
+                await adapter.start(state.config.working_directory, state.config.name)
+                if self._current(state, adapter):
+                    self._finish_connect(state, adapter)
+            except (Exception, asyncio.CancelledError):
+                if self._current(state, adapter):
+                    await self._failed_connect(state, adapter)
+                raise
 
     async def restore(self, summary: ThreadSummary, name: str | None = None) -> AgentState:
         callsign = (name or summary.name or "").strip()
@@ -147,23 +180,26 @@ class AgentManager:
         state.current_activity = "hydrating archived turns"
         adapter = self._new_adapter(summary.provider)
         self.attach_adapter(state, adapter)
-        try:
-            page = await adapter.resume_thread(summary.id, summary.cwd)
-            if not summary.name:
-                await adapter.set_thread_name(summary.id, callsign)
-            state.transcript = page.transcript
-            state.operations = page.operations
-            state.history_cursor = page.next_cursor
-            self._finish_connect(state, adapter)
-        except Exception:
-            state.status = AgentStatus.ERROR
-            state.current_activity = "restore failed"
-            self._on_event(state, AgentEvent("error", "restore failed"))
-            await adapter.stop()
-            raise
+        async with self._own_task(state):
+            try:
+                page = await adapter.resume_thread(summary.id, summary.cwd)
+                if not summary.name:
+                    await adapter.set_thread_name(summary.id, callsign)
+                state.transcript = page.transcript
+                state.operations = page.operations
+                state.history_cursor = page.next_cursor
+                self._finish_connect(state, adapter)
+            except (Exception, asyncio.CancelledError):
+                state.status = AgentStatus.ERROR
+                state.current_activity = "restore failed"
+                self._on_event(state, AgentEvent("error", "restore failed"))
+                await adapter.stop()
+                raise
         return state
 
     def _finish_connect(self, state: AgentState, adapter: AgentAdapter) -> None:
+        if not self._current(state, adapter):
+            return
         state.thread_id = adapter.thread_id
         state.model = adapter.model
         state.model_provider = adapter.model_provider
@@ -187,9 +223,14 @@ class AgentManager:
         await adapter.stop()
 
     async def spawn(
-        self, name: str, working_directory: Path, *, provider: str = "codex"
+        self,
+        name: str,
+        working_directory: Path,
+        *,
+        provider: str = "codex",
+        native_agent: str | None = None,
     ) -> AgentState:
-        state = self.register(name, working_directory, provider=provider)
+        state = self.register(name, working_directory, provider=provider, native_agent=native_agent)
         await self.connect(state)
         return state
 
@@ -198,30 +239,118 @@ class AgentManager:
             raise ValueError(f"{state.config.provider} does not expose paged history")
         if not state.history_cursor:
             return HistoryPage()
-        page = await self.adapter_for(state).list_turns(cursor=state.history_cursor)
+        adapter = self.adapter_for(state)
+        async with self._own_task(state):
+            page = await adapter.list_turns(cursor=state.history_cursor)
+        if not self._current(state, adapter):
+            return HistoryPage()
         state.transcript[0:0] = page.transcript
         state.operations[0:0] = page.operations
         state.history_cursor = page.next_cursor
         return page
 
+    def recovery_guidance(self, state: AgentState) -> str:
+        if state.capabilities.load_session and state.thread_id:
+            return "run /retry"
+        return "disconnect this uplink and use /new"
+
+    def _current(self, state: AgentState, adapter: AgentAdapter) -> bool:
+        return self._adapters.get(str(state.config.id)) is adapter
+
+    def _retain_uncertain(self, state: AgentState, prompt: str) -> None:
+        state.uncertain_prompts.append(prompt)
+        state.queue_paused = True
+        state.current_activity = "delivery uncertain; review /queue and transcript"
+        self._on_event(state, AgentEvent("delivery_uncertain", prompt))
+
     async def send(self, state: AgentState, prompt: str) -> None:
+        if state.status is not AgentStatus.READY or state.cancellation_pending:
+            raise ValueError(f"{state.config.name} requires READY")
+        await self._deliver(state, prompt, steering=False)
+
+    async def _deliver(self, state: AgentState, prompt: str, *, steering: bool) -> None:
+        adapter = self.adapter_for(state)
+        key = str(state.config.id)
+        task = asyncio.current_task()
+        owned = self._owned.setdefault(key, set())
+        owned.add(task)
         entry = TranscriptEntry("user", prompt)
         state.transcript.append(entry)
-        state.status = AgentStatus.PROCESSING
-        state.current_activity = "generating response"
-        # ACP prompt requests remain open until the turn completes. Notify the UI
-        # before awaiting provider acceptance so the operator's message is visible
-        # immediately for every transport.
-        self._on_event(state, AgentEvent("user_submitted", prompt))
+        if not steering:
+            state.status = AgentStatus.PROCESSING
+            state.current_activity = "generating response"
+        self._on_event(
+            state, AgentEvent("user_submitted", prompt, method="turn/steer" if steering else "")
+        )
         try:
-            await self.adapter_for(state).send(prompt)
-        except Exception as exc:
-            if entry in state.transcript:
+            if steering:
+                await adapter.steer(prompt)
+            else:
+                await adapter.send(prompt)
+        except SteeringNotSent:
+            if self._current(state, adapter) and entry in state.transcript:
                 state.transcript.remove(entry)
-            state.status = AgentStatus.ERROR
-            state.current_activity = "transmission failed"
-            state.error_message = str(exc)
             raise
+        except (Exception, asyncio.CancelledError) as exc:
+            if self._current(state, adapter):
+                if entry in state.transcript:
+                    state.transcript.remove(entry)
+                self._retain_uncertain(state, prompt)
+                state.status = AgentStatus.ERROR
+                state.error_message = str(exc) or "submission cancelled during delivery"
+            raise
+        finally:
+            owned.discard(task)
+
+    def _queue(self, state: AgentState, prompt: str) -> PromptDisposition:
+        state.queued_prompts.append(prompt)
+        self._on_event(state, AgentEvent("prompt_queued", prompt))
+        return "queued"
+
+    async def submit_prompt(self, state: AgentState, prompt: str) -> PromptDisposition:
+        """Continue the selected conversation without replaying uncertain input."""
+        if state.queue_paused or state.cancellation_pending:
+            return self._queue(state, prompt)
+        if state.status is AgentStatus.READY:
+            await self.send(state, prompt)
+            return "sent"
+        if state.status not in {
+            AgentStatus.PROCESSING,
+            AgentStatus.EXECUTING,
+            AgentStatus.EDITING,
+            AgentStatus.FIREWALL_HOLD,
+        }:
+            raise ValueError(f"{state.config.name} is {state.status.value}; cannot accept input")
+        if not state.capabilities.steering:
+            return self._queue(state, prompt)
+        try:
+            await self.steer(state, prompt)
+        except SteeringNotSent:
+            # The adapter proves no write occurred. READY is still required before
+            # starting a new turn; a completion event may still be in flight.
+            self._queue(state, prompt)
+            self._schedule_queue(state)
+            return "queued"
+        return "steered"
+
+    async def steer(self, state: AgentState, prompt: str) -> None:
+        if not state.capabilities.steering:
+            raise ValueError(f"{state.config.provider} does not support active-turn steering")
+        await self._deliver(state, prompt, steering=True)
+
+    def resume_queue(self, state: AgentState) -> None:
+        if state.status is not AgentStatus.READY or state.cancellation_pending:
+            raise ValueError("Queue resume requires READY")
+        state.queue_paused = False
+        self._schedule_queue(state)
+
+    def clear_queue(self, state: AgentState) -> None:
+        reservation = self._reserved.pop(str(state.config.id), None)
+        if reservation:
+            reservation[0].cancel()
+            state.status = AgentStatus.READY
+        state.queued_prompts.clear()
+        state.uncertain_prompts.clear()
 
     async def rename(self, state: AgentState, name: str) -> None:
         if not state.capabilities.rename:
@@ -233,15 +362,70 @@ class AgentManager:
             raise ValueError(f"Callsign already in use: {name}")
         if not state.thread_id:
             raise ValueError("Agent has no thread")
-        await self.adapter_for(state).set_thread_name(state.thread_id, name)
-        state.config.name = name
+        adapter = self.adapter_for(state)
+        async with self._own_task(state):
+            await adapter.set_thread_name(state.thread_id, name)
+        if self._current(state, adapter):
+            state.config.name = name
 
     async def interrupt(self, state: AgentState) -> None:
         if not state.capabilities.interrupt:
             raise ValueError(f"{state.config.provider} does not support interruption")
-        await self.adapter_for(state).interrupt_turn()
-        state.status = AgentStatus.READY
-        state.current_activity = "turn interrupted"
+        state.queue_paused = True
+        if state.cancellation_pending or state.status is AgentStatus.READY:
+            return
+        adapter = self.adapter_for(state)
+        key = str(state.config.id)
+        reservation = self._reserved.get(key)
+        if reservation:
+            reservation[0].cancel()
+            with suppress(asyncio.CancelledError):
+                await reservation[0]
+            state.status = AgentStatus.READY
+            return
+        completed = self._completion.setdefault(key, asyncio.Event())
+        completed.clear()
+        state.cancellation_pending = True
+        state.current_activity = "cancellation pending; queue paused"
+        task = asyncio.current_task()
+        owned = self._owned.setdefault(key, set())
+        owned.add(task)
+        try:
+            async with asyncio.timeout(self.cancellation_timeout):
+                await adapter.interrupt_turn()
+                await completed.wait()
+                if state.status is AgentStatus.ERROR:
+                    raise RuntimeError(
+                        state.error_message or "transport failed during cancellation"
+                    )
+        except Exception as exc:
+            if self._current(state, adapter):
+                await self._cancel_owned(key)
+                await self._cancel_pump(key)
+                await adapter.stop()
+                apply_agent_event(
+                    state,
+                    AgentEvent("error", f"Cancellation failed: {str(exc) or type(exc).__name__}"),
+                )
+                self._on_event(
+                    state, AgentEvent("error", state.error_message or "Cancellation failed")
+                )
+            raise
+        finally:
+            owned.discard(task)
+            if self._current(state, adapter):
+                state.cancellation_pending = False
+
+    async def _cancel_owned(self, key: str) -> None:
+        tasks = set(self._owned.get(key, ()))
+        queued = self._send_tasks.pop(key, None)
+        if queued:
+            tasks.add(queued)
+        tasks.discard(asyncio.current_task())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def compact_context(self, state: AgentState) -> None:
         if not state.capabilities.context_compaction:
@@ -250,13 +434,19 @@ class AgentManager:
             raise ValueError(f"{state.config.name} is {state.status.value}; wait for READY")
         state.status = AgentStatus.PROCESSING
         state.current_activity = "compacting context"
-        try:
-            await self.adapter_for(state).compact_context()
-        except Exception as exc:
-            state.status = AgentStatus.ERROR
-            state.current_activity = "context compaction failed"
-            state.error_message = str(exc)
-            raise
+        adapter = self.adapter_for(state)
+        async with self._own_task(state):
+            try:
+                await adapter.compact_context()
+            except Exception as exc:
+                if self._current(state, adapter):
+                    state.queue_paused = True
+                    state.status = AgentStatus.ERROR
+                    state.current_activity = "context compaction failed"
+                    state.error_message = str(exc)
+                raise
+        if not self._current(state, adapter):
+            return
         state.status = AgentStatus.READY
         state.current_activity = "context compacted"
         state.context_tokens = 0
@@ -264,6 +454,7 @@ class AgentManager:
 
     async def _remove(self, state: AgentState) -> None:
         key = str(state.config.id)
+        await self._cancel_owned(key)
         await self._cancel_pump(key)
         adapter = self._adapters.pop(key, None)
         try:
@@ -288,8 +479,11 @@ class AgentManager:
     async def archive(self, state: AgentState) -> None:
         if not state.capabilities.archive:
             raise ValueError(f"{state.config.provider} does not support archiving")
-        await self.adapter_for(state).archive_thread()
-        await self._remove(state)
+        adapter = self.adapter_for(state)
+        async with self._own_task(state):
+            await adapter.archive_thread()
+        if self._current(state, adapter):
+            await self._remove(state)
 
     async def retry(self, state: AgentState) -> None:
         if not state.capabilities.load_session:
@@ -297,6 +491,9 @@ class AgentManager:
         if not state.thread_id:
             raise ValueError("Agent has no thread to restore")
         key = str(state.config.id)
+        state.queue_paused = True
+        await self._cancel_owned(key)
+        state.cancellation_pending = False
         old_adapter = self._adapters.pop(key, None)
         await self._cancel_pump(key)
         if old_adapter:
@@ -304,22 +501,23 @@ class AgentManager:
         state.status = AgentStatus.RESTORING
         state.current_activity = "re-establishing uplink"
         state.recovery_attempts += 1
-        adapter = self._new_adapter(state.config.provider)
+        adapter = self._new_adapter(state.config.provider, state.config.native_agent)
         self.attach_adapter(state, adapter)
-        try:
-            page = await adapter.resume_thread(state.thread_id, state.config.working_directory)
-            state.transcript[:] = page.transcript
-            state.operations[:] = page.operations
-            state.history_cursor = page.next_cursor
-            self._finish_connect(state, adapter)
-        except Exception as exc:
-            state.status = AgentStatus.ERROR
-            state.current_activity = "recovery failed"
-            state.error_message = str(exc)
-            await adapter.stop()
-            self._adapters.pop(key, None)
-            self._on_event(state, AgentEvent("error", str(exc)))
-            raise
+        async with self._own_task(state):
+            try:
+                page = await adapter.resume_thread(state.thread_id, state.config.working_directory)
+                state.transcript[:] = page.transcript
+                state.operations[:] = page.operations
+                state.history_cursor = page.next_cursor
+                self._finish_connect(state, adapter)
+            except (Exception, asyncio.CancelledError) as exc:
+                state.status = AgentStatus.ERROR
+                state.current_activity = "recovery failed"
+                state.error_message = str(exc)
+                await adapter.stop()
+                self._adapters.pop(key, None)
+                self._on_event(state, AgentEvent("error", str(exc)))
+                raise
 
     async def dispatch(self, targets: list[AgentState], prompt: str) -> dict[str, str | None]:
         if len(targets) < 2:
@@ -351,7 +549,11 @@ class AgentManager:
     async def respond_approval(
         self, state: AgentState, request_id: int | str, decision: str
     ) -> None:
-        await self.adapter_for(state).respond_approval(request_id, decision)
+        adapter = self.adapter_for(state)
+        async with self._own_task(state):
+            await adapter.respond_approval(request_id, decision)
+        if not self._current(state, adapter):
+            return
         state.pending_approvals[:] = [
             approval for approval in state.pending_approvals if approval.request_id != request_id
         ]
@@ -375,7 +577,9 @@ class AgentManager:
         return list(await asyncio.gather(*(respond(approval) for approval in pending)))
 
     async def shutdown(self) -> None:
-        tasks = tuple(self._tasks.values())
+        for key in tuple(self._adapters):
+            await self._cancel_owned(key)
+        tasks = (*self._tasks.values(), *self._send_tasks.values())
         for task in tasks:
             task.cancel()
         if tasks:
@@ -387,12 +591,74 @@ class AgentManager:
     async def _pump(self, state: AgentState, adapter: AgentAdapter) -> None:
         try:
             async for event in adapter.events():
+                if not self._current(state, adapter):
+                    return
+                # Startup readiness was already applied by _finish_connect. It
+                # may still be queued when the operator begins the first turn.
+                if (event.params or {}).get("connection_ready"):
+                    continue
+                # ERROR is terminal for a connection. Late completion cannot make
+                # an uncertain transport safe to use again.
+                if state.status is AgentStatus.ERROR:
+                    continue
                 apply_agent_event(state, event)
+                if (
+                    event.kind == "status" and event.text == "ready"
+                ) or state.status is AgentStatus.ERROR:
+                    self._completion.setdefault(str(state.config.id), asyncio.Event()).set()
                 self._on_event(state, event)
+                self._schedule_queue(state)
         except asyncio.CancelledError:
             raise
         except Exception as exc:  # noqa: BLE001
+            if not self._current(state, adapter):
+                return
+            state.queue_paused = True
             state.status = AgentStatus.ERROR
             state.current_activity = "event pump failed"
             state.error_message = str(exc)
             self._on_event(state, AgentEvent("error", f"event pump failed: {exc}"))
+
+    def _schedule_queue(self, state: AgentState) -> None:
+        if (
+            state.status is not AgentStatus.READY
+            or not state.queued_prompts
+            or state.queue_paused
+            or state.cancellation_pending
+        ):
+            return
+        prompt = state.queued_prompts.pop(0)
+        state.status = AgentStatus.PROCESSING
+        state.current_activity = "dispatching queued input"
+        key = str(state.config.id)
+
+        async def deliver() -> None:
+            self._reserved.pop(key, None)
+            await self._send_queued(state, prompt)
+
+        def finished(done: asyncio.Task[None]) -> None:
+            if self._reserved.get(key) == (done, prompt):
+                self._reserved.pop(key)
+                state.queued_prompts.insert(0, prompt)
+            self._send_task_done(key, done)
+
+        task = asyncio.create_task(deliver())
+        self._send_tasks[key] = task
+        self._reserved[key] = (task, prompt)
+        task.add_done_callback(finished)
+
+    async def _send_queued(self, state: AgentState, prompt: str) -> None:
+        adapter = self.adapter_for(state)
+        try:
+            await self._deliver(state, prompt, steering=False)
+        except Exception as exc:  # noqa: BLE001 - queued sends become per-agent errors
+            if not self._current(state, adapter):
+                return
+            state.status = AgentStatus.ERROR
+            state.current_activity = "queued transmission failed"
+            state.error_message = str(exc)
+            self._on_event(state, AgentEvent("error", f"queued transmission failed: {exc}"))
+
+    def _send_task_done(self, key: str, task: asyncio.Task[None]) -> None:
+        if self._send_tasks.get(key) is task:
+            self._send_tasks.pop(key, None)

@@ -8,6 +8,7 @@ from .domain import (
     OperationState,
     PendingApproval,
     TranscriptEntry,
+    TurnUsage,
     operation_from_item,
 )
 from .providers import AgentEvent
@@ -36,6 +37,8 @@ def _status(state: AgentState, event: AgentEvent) -> None:
     status = AgentStatus(normalized)
     activity = "generating response" if status is AgentStatus.PROCESSING else "awaiting input"
     state.transition_to(status, activity)
+    if status is AgentStatus.READY:
+        _report_usage(state)
 
 
 def _user_replay(state: AgentState, event: AgentEvent) -> None:
@@ -95,6 +98,27 @@ def _token_usage(state: AgentState, event: AgentEvent) -> None:
     window = usage.get("modelContextWindow")
     state.context_window = int(window) if window else None
     state.context_percentage = None
+    state.last_turn_usage = TurnUsage(
+        input_tokens=int(last.get("inputTokens") or 0),
+        cached_input_tokens=int(last.get("cachedInputTokens") or 0),
+        output_tokens=int(last.get("outputTokens") or 0),
+        reasoning_output_tokens=int(last.get("reasoningOutputTokens") or 0),
+        total_tokens=int(last.get("totalTokens") or 0),
+    )
+    state.usage_report_pending = state.status in {
+        AgentStatus.PROCESSING,
+        AgentStatus.EXECUTING,
+        AgentStatus.EDITING,
+        AgentStatus.FIREWALL_HOLD,
+    }
+
+
+def _report_usage(state: AgentState) -> None:
+    if state.usage_report_pending and state.last_turn_usage:
+        state.transcript.append(
+            TranscriptEntry("system", f"TURN USAGE // {state.last_turn_usage.summary()}")
+        )
+        state.usage_report_pending = False
 
 
 def _context_usage(state: AgentState, event: AgentEvent) -> None:
@@ -103,6 +127,8 @@ def _context_usage(state: AgentState, event: AgentEvent) -> None:
 
 
 def _failure(state: AgentState, event: AgentEvent) -> None:
+    state.queue_paused = True
+    state.cancellation_pending = False
     state.transition_to(
         AgentStatus.ERROR,
         event.text,

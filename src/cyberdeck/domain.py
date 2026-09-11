@@ -26,6 +26,7 @@ class AgentCapabilities:
     templates: bool = False
     remote_transport: bool = False
     context_compaction: bool = False
+    steering: bool = False
 
     def supports(self, action: str) -> bool:
         return {
@@ -65,6 +66,28 @@ class AgentConfig:
     working_directory: Path
     provider: str = "codex"
     id: UUID = field(default_factory=uuid4)
+    native_agent: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TurnUsage:
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
+
+    def summary(self) -> str:
+        parts = [f"{self.total_tokens:,} total"]
+        if self.input_tokens:
+            parts.append(f"{self.input_tokens:,} input")
+        if self.cached_input_tokens:
+            parts.append(f"{self.cached_input_tokens:,} cached")
+        if self.output_tokens:
+            parts.append(f"{self.output_tokens:,} output")
+        if self.reasoning_output_tokens:
+            parts.append(f"{self.reasoning_output_tokens:,} reasoning")
+        return " • ".join(parts) + " tokens"
 
 
 @dataclass(slots=True)
@@ -138,11 +161,17 @@ class AgentState:
     context_tokens: int = 0
     context_window: int | None = None
     context_percentage: float | None = None
+    last_turn_usage: TurnUsage | None = None
+    usage_report_pending: bool = False
+    queued_prompts: list[str] = field(default_factory=list)
     prompt_draft: str = ""
     error_message: str | None = None
     recovery_attempts: int = 0
     pending_approvals: list[PendingApproval] = field(default_factory=list)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
+    uncertain_prompts: list[str] = field(default_factory=list)
+    queue_paused: bool = False
+    cancellation_pending: bool = False
 
     def transition_to(
         self,

@@ -27,7 +27,9 @@ class CommandSpec:
 
 
 BUILTIN_COMMANDS = (
-    CommandSpec("/new", "new uplink: /new CALLSIGN [RUNTIME] [PATH]", append_space=True),
+    CommandSpec(
+        "/new", "new uplink: /new CALLSIGN [RUNTIME] [PATH] [--agent NATIVE]", append_space=True
+    ),
     CommandSpec("/runtimes", "show runtime availability and versions"),
     CommandSpec("/restore", "open Archive Uplink"),
     CommandSpec("/agents", "list connected uplinks"),
@@ -35,6 +37,7 @@ BUILTIN_COMMANDS = (
     CommandSpec("/agent", "open Operative Control"),
     CommandSpec("/rename", "persist a new callsign", handler="control"),
     CommandSpec("/interrupt", "interrupt the active turn", handler="control"),
+    CommandSpec("/queue", "inspect, resume, or clear pending input", append_space=True),
     CommandSpec("/retry", "restore an errored uplink", handler="control"),
     CommandSpec("/disconnect", "reversibly close the active uplink", handler="control"),
     CommandSpec("/archive", "archive and close the active uplink", handler="control"),

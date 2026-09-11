@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import tempfile
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import date, datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
@@ -92,6 +93,9 @@ __all__ = [
     "ice_level",
     "main",
 ]
+
+
+_PROMPT_TARGET: ContextVar[AgentState | None] = ContextVar("prompt_target")
 
 
 class CyberdeckApp(App[None]):
@@ -497,16 +501,19 @@ class CyberdeckApp(App[None]):
             SpawnAgent(
                 self.manager.runtime_preflights(),
                 self.deck_config.default_runtime,
+                catalog_loader=self.manager.native_agents,
             ),
             self._spawn_result,
         )
 
     def _spawn_result(self, result):
         if result:
-            self._spawn(*result)
+            self._spawn(result.callsign, result.workspace, result.runtime, result.native_agent)
 
     @work(exclusive=False)
-    async def _spawn(self, name: str, path: Path, provider: str = "codex") -> None:
+    async def _spawn(
+        self, name: str, path: Path, provider: str = "codex", native_agent: str | None = None
+    ) -> None:
         preflight = next(
             (row for row in self.manager.runtime_preflights() if row.runtime_id == provider),
             None,
@@ -515,7 +522,7 @@ class CyberdeckApp(App[None]):
             self._write_local(f"runtime unavailable: {provider} // {preflight.detail}")
             return
         try:
-            state = self.manager.register(name, path, provider=provider)
+            state = self.manager.register(name, path, provider=provider, native_agent=native_agent)
         except ValueError as exc:
             self._write_local(str(exc))
             return
@@ -597,10 +604,10 @@ class CyberdeckApp(App[None]):
             # changing the prompt or submitting it.
             self._prompt_completions = []
             self._render_prompt_completions()
-        prompt = event.value.strip()
-        if not prompt:
+        prompt = event.value
+        if not prompt.strip():
             return
-        if prompt.startswith("/") and "\n" in prompt:
+        if prompt.lstrip().startswith("/") and "\n" in prompt:
             self.notify(
                 "Commands must stay on one line; edit the draft and submit again.",
                 title="COMMAND NOT SENT",
@@ -614,32 +621,62 @@ class CyberdeckApp(App[None]):
         state_for_draft = self._active_agent()
         if state_for_draft:
             state_for_draft.prompt_draft = ""
-        if prompt.startswith("/"):
+        if prompt.lstrip().startswith("/"):
             await self._run_local_command(prompt)
             return
         # Provider sends may remain open for the entire turn (ACP session/prompt).
         # Return control to Textual's input pump immediately so operators can keep
         # drafting while the active agent is processing.
         self.run_worker(
-            self.deck_modules[self.active_module_id].handle_prompt(prompt),
+            self._submit_module_prompt(
+                self.deck_modules[self.active_module_id], prompt, state_for_draft
+            ),
             group="deck-prompt",
             exclusive=False,
         )
 
+    async def _submit_module_prompt(
+        self, module: DeckModule, prompt: str, state: AgentState | None
+    ) -> None:
+        # Task-local context preserves Module API v1's one-argument prompt handler.
+        token = _PROMPT_TARGET.set(state)
+        try:
+            await module.handle_prompt(prompt)
+        finally:
+            _PROMPT_TARGET.reset(token)
+
     async def _handle_agent_prompt(self, prompt: str) -> None:
-        state = self._active_agent()
+        await self._submit_agent_prompt(_PROMPT_TARGET.get(self._active_agent()), prompt)
+
+    async def _submit_agent_prompt(self, state: AgentState | None, prompt: str) -> None:
         if not state:
             self._write_local("No active uplink. Use /new or /restore.")
             return
-        if state.status is not AgentStatus.READY:
-            self._write_local(
-                f"{state.config.name} is {state.status.value.upper()}; wait for READY"
-            )
-            return
         try:
-            await self.manager.send(state, prompt)
+            disposition = await self.manager.submit_prompt(state, prompt)
+            if disposition == "queued":
+                feedback = (
+                    f"QUEUED FOR {state.config.name.upper()} // {len(state.queued_prompts)} pending; "
+                    + (
+                        "paused; use /queue"
+                        if state.queue_paused
+                        else "will continue this thread after the current turn"
+                    )
+                )
+                state.transcript.append(TranscriptEntry("system", feedback))
+            elif disposition == "steered":
+                state.transcript.append(
+                    TranscriptEntry("system", f"STEERING ACCEPTED // {state.config.name.upper()}")
+                )
         except Exception as exc:  # noqa: BLE001
-            self._write_local(f"TRANSMISSION FAILED // {exc}\nRECOVERY AVAILABLE // run /retry")
+            state.transcript.append(
+                TranscriptEntry(
+                    "system",
+                    f"TRANSMISSION FAILED // {state.config.provider}: {exc}\n"
+                    "Review /queue for delivery uncertainty.\n"
+                    f"RECOVERY AVAILABLE // {self.manager.recovery_guidance(state)}",
+                )
+            )
         self._refresh_all()
 
     async def _handle_journal_prompt(self, prompt: str) -> None:
@@ -1745,9 +1782,6 @@ class CyberdeckApp(App[None]):
             await self.manager.send(target, payload)
             self._write_local(f"{verb} transmitted to {target.config.name}")
         except Exception as exc:  # noqa: BLE001
-            target.status = AgentStatus.ERROR
-            target.current_activity = f"{verb} failed"
-            target.error_message = str(exc)
             self._write_local(f"{verb} failed for {target.config.name}: {exc}")
         self._refresh_all()
 
@@ -1841,7 +1875,7 @@ class CyberdeckApp(App[None]):
                 TranscriptEntry(
                     "system",
                     f"CONTEXT COMPACTION FAILED // {exc}\n"
-                    "RECOVERY AVAILABLE // run /retry if the uplink was lost",
+                    f"RECOVERY AVAILABLE // {self.manager.recovery_guidance(state)}",
                 )
             )
         else:
@@ -1893,7 +1927,8 @@ class CyberdeckApp(App[None]):
             state.transcript.append(
                 TranscriptEntry(
                     "system",
-                    f"GRID FRACTURE // SIGNAL LOST\n{event.text}\nRECOVERY AVAILABLE // run /retry",
+                    f"GRID FRACTURE // SIGNAL LOST\n{state.config.provider}: {event.text}\n"
+                    f"RECOVERY AVAILABLE // {self.manager.recovery_guidance(state)}",
                 )
             )
 

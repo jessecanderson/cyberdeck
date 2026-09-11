@@ -1,6 +1,6 @@
 from ..domain import AgentCapabilities
 from .acp import AcpAgentAdapter, AcpProtocolError, KiroAcpAdapter
-from .base import AgentAdapter, AgentEvent
+from .base import AgentAdapter, AgentEvent, SteeringNotSent
 from .codex import CodexAppServerAdapter
 
 __all__ = [
@@ -11,4 +11,5 @@ __all__ = [
     "AgentEvent",
     "CodexAppServerAdapter",
     "KiroAcpAdapter",
+    "SteeringNotSent",
 ]
