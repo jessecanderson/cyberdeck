@@ -502,7 +502,9 @@ async def test_failed_send_rolls_back_prompt_and_enters_recoverable_error() -> N
 
     assert state.transcript == []
     assert state.status is AgentStatus.ERROR
-    assert state.current_activity == "transmission failed"
+    assert "delivery uncertain" in state.current_activity
+    assert state.uncertain_prompts == ["unaccepted prompt"]
+    assert state.queue_paused
     assert state.error_message == "radio failure"
 
 

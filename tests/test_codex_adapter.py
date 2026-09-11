@@ -85,7 +85,7 @@ async def test_send_emits_processing_status() -> None:
 
 
 @pytest.mark.asyncio
-async def test_interrupt_uses_active_turn_and_clears_it() -> None:
+async def test_interrupt_keeps_active_turn_until_completion() -> None:
     adapter = CodexAppServerAdapter()
     writer = Writer()
     adapter.process = type("Process", (), {"stdin": writer})()
@@ -106,6 +106,10 @@ async def test_interrupt_uses_active_turn_and_clears_it() -> None:
         }
     )
     await task
+    assert adapter.active_turn_id == "turn-2"
+    await adapter._handle_notification(
+        {"method": "turn/completed", "params": {"turn": {"id": "turn-2"}}}
+    )
     assert adapter.active_turn_id is None
 
 
@@ -359,3 +363,22 @@ async def test_agent_message_delta_preserves_item_identity() -> None:
     assert event.kind == "assistant_delta"
     assert event.message_id == "message-7"
     assert event.text == "Signal acquired."
+
+
+@pytest.mark.asyncio
+async def test_completion_before_start_response_does_not_resurrect_turn():
+    adapter = CodexAppServerAdapter()
+    adapter.thread_id = "thread-1"
+    writer = Writer()
+    adapter.process = type("Process", (), {"stdin": writer})()
+    starting = asyncio.create_task(adapter.send("start"))
+    await asyncio.sleep(0)
+    await adapter._handle_notification(
+        {"method": "turn/completed", "params": {"turn": {"id": "turn-1"}}}
+    )
+    adapter._pending[1].set_result({"turn": {"id": "turn-1"}})
+    await starting
+    assert adapter.active_turn_id is None
+    event = await adapter._events.get()
+    assert event.text == "ready"
+    assert adapter._events.empty()

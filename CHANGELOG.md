@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [0.3.7] - 2026-09-11
+
+- Keep composer messages bound to the selected conversation; add `/queue` inspection,
+  resume, and clear, with paused cancellation/recovery and no automatic replay of
+  uncertain deliveries. Preserve native-agent identity and pending input on retry.
+- Wait for provider completion after interruption, enforce cancellation deadlines,
+  cancel owned sends on connection replacement, and bound ACP control requests and
+  writes while allowing long-running prompts.
 - Accept follow-up input while agents work: steer active Codex turns immediately and
   queue ACP prompts until the selected uplink returns to ready.
 - Show Codex-provided per-turn token usage after each completed request without

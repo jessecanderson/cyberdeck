@@ -13,7 +13,7 @@ from ..domain import (
     map_history_turns,
     parse_timestamp,
 )
-from .base import AgentEvent
+from .base import AgentEvent, SteeringNotSent
 from .jsonline import cancel_pending, cancel_tasks, decode_message, encode_message, fail_pending
 
 # JSON-RPC messages are newline-delimited and can contain large tool or agent payloads.
@@ -23,6 +23,10 @@ CODEX_STREAM_LIMIT = 16 * 1024 * 1024
 
 class CodexProtocolError(RuntimeError):
     pass
+
+
+class CodexSteeringNotSent(CodexProtocolError, SteeringNotSent):
+    """Steering was not written because the local turn already ended."""
 
 
 class CodexAppServerAdapter:
@@ -45,6 +49,7 @@ class CodexAppServerAdapter:
         self.process: asyncio.subprocess.Process | None = None
         self.thread_id: str | None = None
         self.active_turn_id: str | None = None
+        self._completed_turn_id: str | None = None
         self._active_turn_ready = asyncio.Event()
         self._turn_starting = False
         self._next_id = 1
@@ -122,7 +127,7 @@ class CodexAppServerAdapter:
         self.model_provider = result.get("modelProvider", "codex")
         if name:
             await self.set_thread_name(self.thread_id, name)
-        await self._events.put(AgentEvent("status", "ready"))
+        await self._events.put(AgentEvent("status", "ready", params={"connection_ready": True}))
 
     async def resume_thread(self, thread_id: str, working_directory: Path) -> HistoryPage:
         cwd = await self._initialize(working_directory)
@@ -143,7 +148,7 @@ class CodexAppServerAdapter:
             page = map_history_turns(initial.get("data", []), initial.get("nextCursor"))
         else:
             page = await self.list_turns(limit=50)
-        await self._events.put(AgentEvent("status", "ready"))
+        await self._events.put(AgentEvent("status", "ready", params={"connection_ready": True}))
         return page
 
     async def list_threads(
@@ -213,33 +218,36 @@ class CodexAppServerAdapter:
             self.active_turn_id = result.get("turn", {}).get("id")
             if not self.active_turn_id:
                 raise CodexProtocolError("turn/start response did not include a turn id")
+            if self.active_turn_id == self._completed_turn_id:
+                self.active_turn_id = None
             self._active_turn_ready.set()
         finally:
             self._turn_starting = False
             if not self.active_turn_id:
                 self._active_turn_ready.set()
-        await self._events.put(AgentEvent("status", "processing"))
+        if self.active_turn_id:
+            await self._events.put(AgentEvent("status", "processing"))
 
     async def interrupt_turn(self) -> None:
+        if self._turn_starting:
+            await asyncio.wait_for(self._active_turn_ready.wait(), self.request_timeout)
         if not self.thread_id or not self.active_turn_id:
-            raise CodexProtocolError("Agent has no active turn")
+            return
         await self._request(
             "turn/interrupt",
             {"threadId": self.thread_id, "turnId": self.active_turn_id},
         )
-        self.active_turn_id = None
-        self._active_turn_ready.clear()
 
     async def steer(self, prompt: str) -> None:
         if not self.thread_id:
-            raise CodexProtocolError("Agent has no active turn to steer")
+            raise CodexSteeringNotSent("Agent has no active turn to steer")
         if not self.active_turn_id and self._turn_starting:
             try:
                 await asyncio.wait_for(self._active_turn_ready.wait(), timeout=self.request_timeout)
             except TimeoutError as exc:
                 raise CodexProtocolError("Timed out waiting for the active turn to steer") from exc
         if not self.active_turn_id:
-            raise CodexProtocolError("Agent has no active turn to steer")
+            raise CodexSteeringNotSent("Agent has no active turn to steer")
         await self._request(
             "turn/steer",
             {
@@ -302,8 +310,8 @@ class CodexAppServerAdapter:
         self._next_id += 1
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self._write({"id": request_id, "method": method, "params": params})
         try:
+            await self._write({"id": request_id, "method": method, "params": params})
             try:
                 return await asyncio.wait_for(future, timeout=self.request_timeout)
             except TimeoutError as exc:
@@ -313,6 +321,8 @@ class CodexAppServerAdapter:
                 ) from exc
         finally:
             self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
 
     async def _notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         message: dict[str, Any] = {"method": method}
@@ -324,7 +334,7 @@ class CodexAppServerAdapter:
         if not self.process or not self.process.stdin:
             raise CodexProtocolError("Codex app-server is not running")
         self.process.stdin.write(encode_message(message))
-        await self.process.stdin.drain()
+        await asyncio.wait_for(self.process.stdin.drain(), self.request_timeout)
 
     async def _read_stdout(self) -> None:
         assert self.process and self.process.stdout
@@ -335,7 +345,7 @@ class CodexAppServerAdapter:
                     request_id = message["id"]
                     future = self._pending.get(request_id)
                     if not future or future.done():
-                        raise CodexProtocolError(f"response for unknown request id: {request_id}")
+                        continue
                     if "error" in message:
                         future.set_exception(CodexProtocolError(str(message["error"])))
                     else:
@@ -417,6 +427,7 @@ class CodexAppServerAdapter:
         elif method == "thread/tokenUsage/updated":
             await self._events.put(AgentEvent("token_usage", params=params))
         elif method == "turn/completed":
+            self._completed_turn_id = (params.get("turn") or {}).get("id")
             self.active_turn_id = None
             self._active_turn_ready.clear()
             await self._events.put(AgentEvent("status", "ready"))

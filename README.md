@@ -183,7 +183,7 @@ agents.
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
 the active module. Start with `/help`; current commands include `/new`,
 `/restore`, `/agents`, `/runtimes`, `/agent`, `/rename`, `/interrupt`, `/retry`,
-`/disconnect`, `/archive`, `/dispatch`, `/switch`, `/module`, `/next-module`,
+`/disconnect`, `/archive`, `/queue [resume|clear]`, `/dispatch`, `/switch`, `/module`, `/next-module`,
 `/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
 `/quit`. The help window is scrollable and includes commands contributed by
 loaded modules. While autocomplete is visible, use Up/Down to highlight an

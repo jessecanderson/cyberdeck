@@ -362,6 +362,35 @@ def _control(app: CyberdeckApp, args: list[str], command: str) -> None:
         app._control_result(state, (command[1:], args[0] if args else None))
 
 
+def _queue(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    state = app._active_agent()
+    if state is None:
+        app._write_local("No active uplink.")
+        return
+    if args not in ([], ["resume"], ["clear"]):
+        app._write_local("usage: /queue [resume|clear]")
+        return
+    if args == ["resume"]:
+        try:
+            app.manager.resume_queue(state)
+        except ValueError as exc:
+            app._write_local(str(exc))
+            return
+    elif args == ["clear"]:
+        app.manager.clear_queue(state)
+    rows = [f"QUEUE // {state.config.name} // {'PAUSED' if state.queue_paused else 'AUTOMATIC'}"]
+    rows.extend(f"PENDING {index}: {text}" for index, text in enumerate(state.queued_prompts, 1))
+    rows.extend(f"UNCERTAIN: {text}" for text in state.uncertain_prompts)
+    if state.uncertain_prompts:
+        rows.append(
+            "Review the transcript and explicitly resubmit if needed; uncertain input is never replayed."
+        )
+    if not state.queued_prompts and not state.uncertain_prompts:
+        rows.append("No pending input.")
+    app._write_local("\n".join(rows))
+    app._refresh_all()
+
+
 def _quit(app: CyberdeckApp, _args: list[str], _command: str) -> None:
     app.exit()
 
@@ -410,6 +439,7 @@ HANDLERS_BY_KEY: dict[str, CommandHandler] = {
         _kill,
         _approval,
         _control,
+        _queue,
         _quit,
     )
 }

@@ -127,6 +127,8 @@ def _context_usage(state: AgentState, event: AgentEvent) -> None:
 
 
 def _failure(state: AgentState, event: AgentEvent) -> None:
+    state.queue_paused = True
+    state.cancellation_pending = False
     state.transition_to(
         AgentStatus.ERROR,
         event.text,

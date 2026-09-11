@@ -36,6 +36,20 @@ def _command_names(app: CyberdeckApp, value: str, _words: list[str]) -> Completi
     ]
 
 
+def _queue(_app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult:
+    if not words or words[0] != "/queue" or len(words) > 2:
+        return None
+    prefix = "" if value.endswith(" ") else (words[1] if len(words) == 2 else "")
+    return [
+        (action, description)
+        for action, description in (
+            ("resume", "resume confirmed-unsent input when READY"),
+            ("clear", "discard pending and uncertain input"),
+        )
+        if action.startswith(prefix) and action != prefix
+    ]
+
+
 def _density(_app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult:
     if not words or words[0] != "/density" or len(words) > 2:
         return None
@@ -224,6 +238,7 @@ def _path(_app: CyberdeckApp, value: str, _words: list[str]) -> CompletionResult
 
 COMPLETION_RULES: tuple[CompletionRule, ...] = (
     _command_names,
+    _queue,
     _density,
     _module_action,
     _module_record,

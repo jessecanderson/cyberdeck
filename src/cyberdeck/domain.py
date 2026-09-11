@@ -169,6 +169,9 @@ class AgentState:
     recovery_attempts: int = 0
     pending_approvals: list[PendingApproval] = field(default_factory=list)
     capabilities: AgentCapabilities = field(default_factory=AgentCapabilities)
+    uncertain_prompts: list[str] = field(default_factory=list)
+    queue_paused: bool = False
+    cancellation_pending: bool = False
 
     def transition_to(
         self,

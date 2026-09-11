@@ -312,3 +312,61 @@ send({"jsonrpc":"2.0","id":compact["id"],"result":{"success":True}})
     assert agent.capabilities.context_compaction is True
     await agent.compact_context()
     await agent.stop()
+
+
+class ControlWriter:
+    def __init__(self, *, blocked=False, fail=False):
+        self.written = asyncio.Event()
+        self.blocked = blocked
+        self.fail = fail
+
+    def write(self, _data):
+        if self.fail:
+            raise BrokenPipeError("closed pipe")
+        self.written.set()
+
+    async def drain(self):
+        if self.blocked:
+            await asyncio.Event().wait()
+
+
+@pytest.mark.parametrize("method", ["session/new", "session/load", "_kiro.dev/commands/execute"])
+async def test_control_deadline_cleans_pending_and_ignores_late_response(method):
+    agent = AcpAgentAdapter(("fake",), provider="fake", control_timeout=0.01)
+    agent.process = type("Process", (), {"stdin": ControlWriter()})()
+    with pytest.raises(TimeoutError):
+        await agent._request(method, {})
+    assert agent._pending == {}
+    agent._handle_response({"id": 1, "result": {}})
+    assert agent._pending == {}
+
+
+@pytest.mark.parametrize("blocked", [False, True])
+async def test_write_failure_or_deadline_cleans_prompt_request(blocked):
+    agent = AcpAgentAdapter(("fake",), provider="fake", control_timeout=0.01)
+    agent.process = type(
+        "Process", (), {"stdin": ControlWriter(blocked=blocked, fail=not blocked)}
+    )()
+    with pytest.raises(TimeoutError if blocked else BrokenPipeError):
+        await agent._request("session/prompt", {})
+    assert agent._pending == {}
+
+
+async def test_prompt_response_outlives_control_deadline_and_cancellation_cleans_up():
+    agent = AcpAgentAdapter(("fake",), provider="fake", control_timeout=0.01)
+    writer = ControlWriter()
+    agent.process = type("Process", (), {"stdin": writer})()
+    prompt = asyncio.create_task(agent._request("session/prompt", {}))
+    await writer.written.wait()
+    await asyncio.sleep(0.03)
+    assert not prompt.done()
+    agent._handle_response({"id": 1, "result": {"stopReason": "end_turn"}})
+    assert await prompt == {"stopReason": "end_turn"}
+    writer.written.clear()
+    cancelled = asyncio.create_task(agent._request("session/prompt", {}))
+    await writer.written.wait()
+    cancelled.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled
+    assert agent._pending == {}
+    agent._handle_response({"id": 2, "result": {}})

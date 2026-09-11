@@ -30,6 +30,7 @@ class AcpAgentAdapter:
         *,
         provider: str,
         initialize_timeout: float = 15.0,
+        control_timeout: float = 30.0,
         environment: Mapping[str, str] | None = None,
     ) -> None:
         if not command:
@@ -37,6 +38,9 @@ class AcpAgentAdapter:
         self.command = tuple(command)
         self.model_provider = provider
         self.capabilities = AgentCapabilities()
+        if control_timeout <= 0:
+            raise ValueError("ACP control timeout must be positive")
+        self.control_timeout = control_timeout
         self.initialize_timeout = initialize_timeout
         self.environment = dict(environment) if environment is not None else None
         self.process: asyncio.subprocess.Process | None = None
@@ -68,7 +72,7 @@ class AcpAgentAdapter:
         if not self.thread_id:
             raise AcpProtocolError("session/new response did not include sessionId")
         self._capture_session_configuration(result)
-        await self._events.put(AgentEvent("status", "ready"))
+        await self._events.put(AgentEvent("status", "ready", params={"connection_ready": True}))
 
     async def resume_thread(self, thread_id: str, working_directory: Path) -> HistoryPage:
         """Resume provider context; ACP v1 does not return transcript history here."""
@@ -95,7 +99,7 @@ class AcpAgentAdapter:
             self._loading_session = False
         self.thread_id = thread_id
         self._capture_session_configuration(result)
-        await self._events.put(AgentEvent("status", "ready"))
+        await self._events.put(AgentEvent("status", "ready", params={"connection_ready": True}))
         return HistoryPage()
 
     def _working_directory(self, working_directory: Path) -> Path:
@@ -266,11 +270,22 @@ class AcpAgentAdapter:
         self._next_id += 1
         future = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
-        await self._write({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
         try:
-            return await future
+            async with asyncio.timeout(
+                None if method == "session/prompt" else self.control_timeout
+            ):
+                await self._write(
+                    {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+                )
+                return await future
+        except TimeoutError as exc:
+            raise TimeoutError(
+                f"ACP request {method} timed out after {self.control_timeout:g}s"
+            ) from exc
         finally:
             self._pending.pop(request_id, None)
+            if not future.done():
+                future.cancel()
 
     async def _notify(self, method: str, params: dict[str, Any]) -> None:
         await self._write({"jsonrpc": "2.0", "method": method, "params": params})
@@ -279,7 +294,7 @@ class AcpAgentAdapter:
         if not self.process or not self.process.stdin:
             raise AcpProtocolError("ACP agent process is not running")
         self.process.stdin.write(encode_message(message))
-        await self.process.stdin.drain()
+        await asyncio.wait_for(self.process.stdin.drain(), self.control_timeout)
 
     async def _read_stdout(self) -> None:
         assert self.process and self.process.stdout
