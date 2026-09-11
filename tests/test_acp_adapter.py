@@ -366,7 +366,8 @@ async def test_prompt_response_outlives_control_deadline_and_cancellation_cleans
     cancelled = asyncio.create_task(agent._request("session/prompt", {}))
     await writer.written.wait()
     cancelled.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await cancelled
+    async with asyncio.timeout(1):
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
     assert agent._pending == {}
     agent._handle_response({"id": 2, "result": {}})

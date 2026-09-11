@@ -294,7 +294,10 @@ class AcpAgentAdapter:
         if not self.process or not self.process.stdin:
             raise AcpProtocolError("ACP agent process is not running")
         self.process.stdin.write(encode_message(message))
-        await asyncio.wait_for(self.process.stdin.drain(), self.control_timeout)
+        # Keep cancellation in this task: Python 3.11 wait_for can swallow it
+        # when the drain task completes at the same time.
+        async with asyncio.timeout(self.control_timeout):
+            await self.process.stdin.drain()
 
     async def _read_stdout(self) -> None:
         assert self.process and self.process.stdout

@@ -4,6 +4,9 @@
 
 ## [0.3.7] - 2026-09-11
 
+- Preserve cancellation when transport writes complete concurrently on Python 3.11,
+  preventing a cancelled ACP prompt from waiting indefinitely.
+
 - Keep composer messages bound to the selected conversation; add `/queue` inspection,
   resume, and clear, with paused cancellation/recovery and no automatic replay of
   uncertain deliveries. Preserve native-agent identity and pending input on retry.
