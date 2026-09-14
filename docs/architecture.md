@@ -9,9 +9,9 @@ providers must not depend on Textual widgets or application screens.
 
 - `domain.py` contains provider-neutral state and normalization helpers. Domain
   timestamps are timezone-aware UTC values.
-- `providers/` contains Codex App Server and ACP protocol adapters behind the
-  `AgentAdapter` protocol. Claude inference-route selection remains in its provider
-  adapter while sharing ACP lifecycle semantics.
+- `providers/` contains Codex App Server, Claude Agent SDK, and ACP protocol adapters
+  behind the `AgentAdapter` protocol. Claude inference-route selection and SDK message
+  normalization remain in its provider adapter.
 - `runtimes.py` owns executable discovery, preflight, and adapter construction.
 - `manager.py` owns agent lifecycle and transport tasks. `event_reducer.py` applies
   normalized provider events without depending on the UI.
@@ -36,7 +36,7 @@ providers must not depend on Textual widgets or application screens.
 - Public commands and keyboard behavior are preserved during internal refactors.
 - Provider-specific data is normalized before it mutates `AgentState`.
 - External modules target Module API v1 and declare a compatible Cyberdeck release
-  range. The 0.3 line uses `>=0.3,<0.4`.
+  range. Module API v1 remains the extension contract in the 0.4 line.
 - Prompts, transcripts, credentials, and approval payloads are not persisted by
   architecture helpers unless a feature explicitly establishes that policy.
 

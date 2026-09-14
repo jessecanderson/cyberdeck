@@ -234,6 +234,6 @@ runtime and local connection for each operative:
   └─ cyberdeck
 ```
 
-Kiro may replace `CODEX` only for a Kiro-owned ACP session. Claude, Ollama,
-remote, trust, and signal-quality metadata remain reserved until their
+Kiro or Claude may replace `CODEX` only for a session owned by that runtime.
+Ollama, remote, trust, and signal-quality metadata remain reserved until their
 corresponding integrations provide real state.

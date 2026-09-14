@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import os
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-
-from packaging.version import InvalidVersion, Version
 
 from .config import RuntimeConfig
 from .providers import (
     AcpAgentAdapter,
     AgentAdapter,
-    ClaudeAcpAdapter,
+    ClaudeAgentSdkAdapter,
     ClaudeDeployment,
     CodexAppServerAdapter,
     KiroAcpAdapter,
@@ -58,21 +56,21 @@ class RuntimeRegistry:
                 "claude",
                 "Claude (Anthropic)",
                 "claude",
-                ("claude-agent-acp",),
+                (),
                 claude_deployment="anthropic",
             ),
             "claude-bedrock": RuntimeDefinition(
                 "claude-bedrock",
                 "Claude (Amazon Bedrock)",
                 "claude",
-                ("claude-agent-acp",),
+                (),
                 claude_deployment="bedrock",
             ),
             "claude-vertex": RuntimeDefinition(
                 "claude-vertex",
                 "Claude (Google Vertex AI)",
                 "claude",
-                ("claude-agent-acp",),
+                (),
                 claude_deployment="vertex",
             ),
         }
@@ -118,10 +116,7 @@ class RuntimeRegistry:
             if native_agent is not None:
                 raise ValueError(f"Runtime {definition.id} does not support native-agent launch")
             assert definition.claude_deployment is not None
-            return ClaudeAcpAdapter(
-                self._resolve_executable(definition.command[0]),
-                deployment=definition.claude_deployment,
-            )
+            return ClaudeAgentSdkAdapter(deployment=definition.claude_deployment)
         if native_agent is not None:
             raise ValueError(f"Runtime {definition.id} does not support native-agent launch")
         command = (self._resolve_executable(definition.command[0]), *definition.command[1:])
@@ -140,16 +135,18 @@ class RuntimeRegistry:
         if not refresh and runtime_id in self._preflight_cache:
             return self._preflight_cache[runtime_id]
         definition = self.definition(runtime_id)
+        if definition.kind == "claude":
+            result = self._claude_preflight(definition)
+            self._preflight_cache[runtime_id] = result
+            return result
         executable = self._find_executable(definition.command[0])
         if not executable:
             result = RuntimePreflight(
                 runtime_id,
                 definition.label,
                 False,
-                self._missing_executable_detail(definition),
+                f"executable not found: {definition.command[0]}",
             )
-        elif definition.kind == "claude":
-            result = self._claude_preflight(definition, executable)
         else:
             version = self._version(executable)
             result = RuntimePreflight(
@@ -165,31 +162,15 @@ class RuntimeRegistry:
     def preflights(self, *, refresh: bool = False) -> tuple[RuntimePreflight, ...]:
         return tuple(self.preflight(runtime_id, refresh=refresh) for runtime_id in self.ids)
 
-    def _claude_preflight(self, definition: RuntimeDefinition, executable: str) -> RuntimePreflight:
-        node = self._find_executable("node")
-        node_version = self._version(node) if node else None
-        match = re.search(r"(?:^|\s)v?(\d+)(?:\.|$)", node_version or "")
-        if not match or int(match.group(1)) < 22:
-            found = node_version or "not found"
-            return RuntimePreflight(
-                definition.id,
-                definition.label,
-                False,
-                f"Node.js 22+ required; found {found}",
-            )
-        adapter_version = self._version(executable)
+    def _claude_preflight(self, definition: RuntimeDefinition) -> RuntimePreflight:
         try:
-            compatible_adapter = Version(adapter_version or "").release[:2] == (0, 76)
-        except InvalidVersion:
-            compatible_adapter = False
-        if not compatible_adapter:
-            found = adapter_version or "unknown"
+            sdk_version = version("claude-agent-sdk")
+        except PackageNotFoundError:
             return RuntimePreflight(
                 definition.id,
                 definition.label,
                 False,
-                f"Claude ACP 0.76.x required; found {found}",
-                adapter_version,
+                "bundled Claude Agent SDK missing; reinstall Cyberdeck",
             )
         deployment = definition.claude_deployment or "anthropic"
         guidance = {
@@ -201,18 +182,9 @@ class RuntimeRegistry:
             definition.id,
             definition.label,
             True,
-            f"ACP adapter ready with {node_version}; {guidance}",
-            adapter_version,
+            f"bundled Claude Agent SDK {sdk_version}; {guidance}",
+            sdk_version,
         )
-
-    @staticmethod
-    def _missing_executable_detail(definition: RuntimeDefinition) -> str:
-        if definition.kind == "claude":
-            return (
-                "executable not found: claude-agent-acp; install "
-                "@agentclientprotocol/claude-agent-acp@0.76.0 with Node.js 22+"
-            )
-        return f"executable not found: {definition.command[0]}"
 
     @staticmethod
     def _find_executable(command: str) -> str | None:
