@@ -130,7 +130,10 @@ class ClaudeAgentSdkAdapter:
                 ToolPermissionContext,
             ],
         ] = {}
-        self._streamed_messages: set[str] = set()
+        self._assistant_segment = 0
+        self._assistant_message_id: str | None = None
+        self._assistant_boundary = True
+        self._streamed_text = False
         self._tools: dict[str, tuple[str, str, dict[str, Any]]] = {}
         self._stopped = False
 
@@ -193,7 +196,8 @@ class ClaudeAgentSdkAdapter:
         client = self._require_client()
         if not self.thread_id:
             raise ClaudeProviderError("Claude session has not started")
-        self._streamed_messages.clear()
+        self._assistant_boundary = True
+        self._streamed_text = False
         await client.query(prompt, session_id=self.thread_id)
         received_result = False
         async for message in client.receive_response():
@@ -211,11 +215,14 @@ class ClaudeAgentSdkAdapter:
             self.model = message.model or self.model
             if message.parent_tool_use_id is not None:
                 return
+            self._adopt_assistant_message_id(message.message_id or message.uuid)
             for block in message.content:
-                if isinstance(block, TextBlock) and message.uuid not in self._streamed_messages:
-                    await self._emit_text(block.text, message.uuid or message.message_id)
+                if isinstance(block, TextBlock) and not self._streamed_text:
+                    await self._emit_text(block.text, self._current_assistant_message_id())
                 elif isinstance(block, ToolUseBlock):
                     await self._emit_tool_start(block)
+            self._streamed_text = False
+            self._assistant_boundary = True
             return
         if isinstance(message, UserMessage) and isinstance(message.content, list):
             for block in message.content:
@@ -246,13 +253,21 @@ class ClaudeAgentSdkAdapter:
         if message.parent_tool_use_id is not None:
             return
         event = message.event
+        if event.get("type") == "message_start":
+            raw_message = event.get("message") or {}
+            self._adopt_assistant_message_id(raw_message.get("id"))
+            model = raw_message.get("model")
+            if model:
+                self.model = str(model)
+            return
         if event.get("type") != "content_block_delta":
             return
         delta = event.get("delta") or {}
         if delta.get("type") != "text_delta" or not delta.get("text"):
             return
-        self._streamed_messages.add(message.uuid)
-        await self._emit_text(str(delta["text"]), message.uuid)
+        self._adopt_assistant_message_id(message.uuid)
+        self._streamed_text = True
+        await self._emit_text(str(delta["text"]), self._current_assistant_message_id())
 
     async def _emit_text(self, text: str, message_id: str | None) -> None:
         if text:
@@ -276,6 +291,7 @@ class ClaudeAgentSdkAdapter:
                 },
             )
         )
+        self._assistant_boundary = True
 
     async def _emit_tool_result(self, block: ToolResultBlock) -> None:
         kind, name, input_data = self._tools.pop(block.tool_use_id, ("dynamicToolCall", "tool", {}))
@@ -295,6 +311,20 @@ class ClaudeAgentSdkAdapter:
                 },
             )
         )
+        self._assistant_boundary = True
+
+    def _current_assistant_message_id(self) -> str:
+        if self._assistant_boundary or self._assistant_message_id is None:
+            self._assistant_segment += 1
+            session = self.thread_id or "pending"
+            self._assistant_message_id = f"claude:{session}:{self._assistant_segment}"
+            self._assistant_boundary = False
+        return self._assistant_message_id
+
+    def _adopt_assistant_message_id(self, message_id: str | None) -> None:
+        if message_id and self._assistant_boundary:
+            self._assistant_message_id = message_id
+            self._assistant_boundary = False
 
     async def _emit_usage(self, message: ResultMessage) -> None:
         usage = message.usage or {}
