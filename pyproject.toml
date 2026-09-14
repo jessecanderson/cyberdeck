@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "cyberdeck-tui"
-version = "0.3.7"
+version = "0.4.0"
 description = "A neon multi-agent terminal interface for local coding agents"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,7 +13,7 @@ license-files = ["LICENSE"]
 authors = [
   { name = "Jesse Anderson" },
 ]
-keywords = ["ai", "agents", "codex", "terminal", "textual", "tui"]
+keywords = ["ai", "agents", "anthropic", "claude", "codex", "acp", "terminal", "textual", "tui"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",

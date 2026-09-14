@@ -10,7 +10,8 @@ providers must not depend on Textual widgets or application screens.
 - `domain.py` contains provider-neutral state and normalization helpers. Domain
   timestamps are timezone-aware UTC values.
 - `providers/` contains Codex App Server and ACP protocol adapters behind the
-  `AgentAdapter` protocol.
+  `AgentAdapter` protocol. Claude inference-route selection remains in its provider
+  adapter while sharing ACP lifecycle semantics.
 - `runtimes.py` owns executable discovery, preflight, and adapter construction.
 - `manager.py` owns agent lifecycle and transport tasks. `event_reducer.py` applies
   normalized provider events without depending on the UI.

@@ -40,3 +40,8 @@ unbounded. Capability-gated steering adapters may raise
 `cyberdeck.providers.SteeringNotSent` only when they can prove input was not sent
 or accepted. Other failures are retained as uncertain and cannot be automatically
 replayed. No additional provider request methods are required.
+
+`cyberdeck.providers.ClaudeAcpAdapter` is the built-in ACP adapter for the maintained
+Claude Agent SDK bridge. Its `deployment` is `anthropic`, `bedrock`, or `vertex`; the
+corresponding public `ClaudeDeployment` type and `claude_environment` helper are also
+exported. These select the inference route without reading or storing credentials.

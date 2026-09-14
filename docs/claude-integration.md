@@ -1,18 +1,20 @@
-# Claude local runtime research
+# Claude local runtime integration
 
-Research date: 2026-09-11. This is an integration proposal, not a claim that
-Cyberdeck 0.3.7 includes or has live-validated Claude support. Tracks
+Research date: 2026-09-11; implementation updated 2026-09-14. Cyberdeck 0.4.0 has
+built-in Anthropic, Amazon Bedrock, and Google Vertex AI runtime definitions. Tracks
 [issue #26](https://github.com/jessecanderson/cyberdeck/issues/26).
 
 ## Recommended route
 
-Reuse the existing ACP v1 stdio adapter with a built-in `claude` runtime preset.
+Reuse the existing ACP v1 stdio adapter with three built-in runtime presets:
+`claude`, `claude-bedrock`, and `claude-vertex`.
 The maintained adapter moved from Zed's namespace to
 [`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp).
-The npm stable release observed during research was 0.76.0; its executable is
+The npm stable release observed during implementation was 0.76.0; its executable is
 `claude-agent-acp`, and it requires Node 22 or newer. It uses Anthropic's Claude
-Agent SDK. Pin and test a released adapter version before declaring compatibility;
-do not use its preview channel for a supported Cyberdeck preset.
+Agent SDK. Cyberdeck accepts the tested `0.76.x` release line and rejects other
+versions in preflight until they are validated. Do not use the adapter's preview
+channel for a supported Cyberdeck preset.
 [Package metadata](https://github.com/agentclientprotocol/claude-agent-acp/blob/v0.76.0/package.json).
 
 Here, local means Cyberdeck owns a local agent process. Claude inference still uses
@@ -50,31 +52,34 @@ should not copy credentials, initiate browser login implicitly, or save credenti
 values. Preserve the configured environment and provider-owned policy. Confirm the
 specific Anthropic, Bedrock, or Vertex setup used at work through an opt-in live test.
 
-A possible manual test configuration after installing the pinned adapter is:
+A custom-runtime configuration is no longer needed. After installing the pinned
+adapter, select a built-in runtime:
 
-```toml
-[[runtimes]]
-id = "claude"
-label = "Claude Agent (ACP candidate)"
-command = ["claude-agent-acp"]
+```text
+/new case claude ~/src/project
+/new molly claude-bedrock ~/src/project
+/new wintermute claude-vertex ~/src/project
 ```
 
-This uses Cyberdeck's existing custom-runtime facility; it is not yet a supported
-built-in preset. Candidate installation: `npm install -g @agentclientprotocol/claude-agent-acp@0.76.0`.
-No installation or authenticated Claude session was performed during this research.
+Installation: `npm install -g @agentclientprotocol/claude-agent-acp@0.76.0`.
+ACP initialization and session creation have been validated locally with Node.js
+22.23.2 for all three routes. No authenticated model prompt was sent during that
+transport validation.
 
-## Proposed implementation and acceptance
+## Implementation and validation
 
-1. Add a built-in runtime definition, executable/Node/version preflight, and clear
-   provider-owned authentication guidance. Resolve any collision with an existing
-   custom runtime named `claude` explicitly.
-2. Keep provider-specific exceptions in `providers/`; reuse manager lifecycle and
-   the standard ACP reducer. Add no Claude-specific manager or UI state.
-3. Add fake-server coverage for initialization, streaming/tool events, permission
-   approval and denial, cancellation, session restore, missing auth, late replies,
+1. Built-in runtime definitions, executable/Node/version preflight, deterministic
+   cloud selection in the process environment and adapter settings tier, and
+   provider-owned authentication guidance are implemented. Claude runtime IDs are
+   reserved from custom configuration collisions.
+2. Provider-specific environment selection lives in `providers/claude.py`; manager
+   lifecycle and the standard ACP reducer remain shared with no Claude-specific UI state.
+3. Existing ACP fake-server coverage exercises initialization, streaming/tool events,
+   permission approval and denial, cancellation, session restore, late replies,
    long turns, and mixed-provider dispatch.
-4. Add an opt-in real compatibility smoke procedure in a scratch workspace. Test
+4. An authenticated compatibility smoke remains opt-in. Test
    create, prompt, permission, interrupt, follow-up, disconnect/retry, and session
    identity with the actual work authentication route.
-5. Publish the tested adapter version and limitations. Treat richer steering,
-   native-agent discovery, compaction, and session-list UI as separate follow-ups.
+5. Cyberdeck 0.4.0 publishes the tested adapter version and limitations. Richer
+   steering, native-agent discovery, compaction, and session-list UI remain separate
+   follow-ups.

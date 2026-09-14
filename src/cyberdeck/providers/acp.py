@@ -67,7 +67,7 @@ class AcpAgentAdapter:
         del name
         cwd = self._working_directory(working_directory)
         await self._initialize(cwd)
-        result = await self._request("session/new", {"cwd": str(cwd), "mcpServers": []})
+        result = await self._request("session/new", self._session_params(cwd))
         self.thread_id = result.get("sessionId")
         if not self.thread_id:
             raise AcpProtocolError("session/new response did not include sessionId")
@@ -80,7 +80,7 @@ class AcpAgentAdapter:
         await self._initialize(cwd)
         if not self.agent_capabilities.get("loadSession"):
             raise AcpProtocolError("ACP agent does not advertise session loading")
-        params = {"sessionId": thread_id, "cwd": str(cwd), "mcpServers": []}
+        params = self._session_params(cwd, session_id=thread_id)
         self._loading_session = True
         try:
             for attempt in range(5):
@@ -108,6 +108,12 @@ class AcpAgentAdapter:
             raise ValueError(f"Working directory does not exist: {cwd}")
         self.cwd = cwd
         return cwd
+
+    def _session_params(self, cwd: Path, *, session_id: str | None = None) -> dict[str, Any]:
+        params: dict[str, Any] = {"cwd": str(cwd), "mcpServers": []}
+        if session_id is not None:
+            params["sessionId"] = session_id
+        return params
 
     async def _initialize(self, cwd: Path) -> None:
         self._intentional_shutdown = False
