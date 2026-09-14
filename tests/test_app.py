@@ -425,9 +425,16 @@ async def test_spawn_agent_refuses_unavailable_runtime() -> None:
 
 def test_new_command_autocompletes_agent_runtimes(tmp_path: Path) -> None:
     app = CyberdeckApp(skip_boot=True)
-    assert app._complete("/new ghost ")[:2] == [
+    assert app._complete("/new ghost ")[:5] == [
         ("codex", "agent runtime"),
         ("kiro", "agent runtime"),
+        ("claude", "agent runtime"),
+        ("claude-bedrock", "agent runtime"),
+        ("claude-vertex", "agent runtime"),
+    ]
+    assert app._complete("/new ghost claude-") == [
+        ("claude-bedrock", "agent runtime"),
+        ("claude-vertex", "agent runtime"),
     ]
     assert app._complete("/new ghost k") == [("kiro", "agent runtime")]
     assert app._complete("/new ghost kiro /tm") == [("/tmp", "directory")]
@@ -444,6 +451,9 @@ def test_new_command_autocompletes_agent_runtimes(tmp_path: Path) -> None:
     assert app._complete("/new ghost /tmp/ ") == [
         ("codex", "agent runtime"),
         ("kiro", "agent runtime"),
+        ("claude", "agent runtime"),
+        ("claude-bedrock", "agent runtime"),
+        ("claude-vertex", "agent runtime"),
     ]
     assert app._complete("/approve a") == [("all", "approve every pending ICE request once")]
     assert app._complete("/tr") == [("/trust", "trust the latest ICE request for this session")]

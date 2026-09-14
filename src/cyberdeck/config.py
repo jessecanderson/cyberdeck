@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 CONFIG_SCHEMA_VERSION = 1
+BUILT_IN_RUNTIME_IDS = frozenset({"codex", "kiro", "claude", "claude-bedrock", "claude-vertex"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,7 +179,7 @@ def _parse_runtimes(value: object, errors: list[str]) -> tuple[RuntimeConfig, ..
         if (
             not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", runtime_id)
             or runtime_id in seen
-            or runtime_id in {"codex", "kiro"}
+            or runtime_id in BUILT_IN_RUNTIME_IDS
         ):
             errors.append("Ignored invalid, duplicate, or reserved runtime definition")
             continue

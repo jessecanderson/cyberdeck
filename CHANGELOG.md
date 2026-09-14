@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.4.0] - 2026-09-14
+
+- Add built-in Claude ACP runtimes for direct Anthropic, Amazon Bedrock, and Google
+  Vertex AI inference. Require Node.js 22+, preflight the maintained
+  `@agentclientprotocol/claude-agent-acp` adapter, select cloud routes without storing
+  credentials, and reuse the existing ACP lifecycle and FIFO conversation queue.
+
 ## [0.3.7] - 2026-09-11
 
 - Preserve cancellation when transport writes complete concurrently on Python 3.11,
@@ -278,6 +285,8 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
+[0.4.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.7...v0.4.0
+[0.3.7]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.5...v0.3.6
 [0.3.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.2.1...v0.3.0
 [0.3.5]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.4...v0.3.5

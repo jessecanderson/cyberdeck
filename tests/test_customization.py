@@ -109,13 +109,16 @@ def test_config_rejects_unknown_density_without_affecting_boot(tmp_path: Path) -
     assert store.errors == ["Invalid density 'minimal'; using standard"]
 
 
+@pytest.mark.parametrize(
+    "runtime_id", ("codex", "kiro", "claude", "claude-bedrock", "claude-vertex")
+)
 def test_config_ignores_reserved_runtime_override_without_losing_preferences(
-    tmp_path: Path,
+    tmp_path: Path, runtime_id: str
 ) -> None:
     store = ConfigStore(tmp_path / "config.toml")
     store.path.write_text(
         '[deck]\ntheme = "afterglow"\n\n[[runtimes]]\n'
-        'id = "codex"\nlabel = "Override"\ncommand = ["other"]\n',
+        f'id = "{runtime_id}"\nlabel = "Override"\ncommand = ["other"]\n',
         encoding="utf-8",
     )
 
