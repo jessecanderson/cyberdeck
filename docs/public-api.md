@@ -1,7 +1,7 @@
 # Public Python API
 
 Cyberdeck's command-line interface is the primary supported interface. Python
-embedders and external modules may rely on these package boundaries during the 0.3
+embedders and external modules may rely on these package boundaries during the 0.4
 release line:
 
 - `cyberdeck.__version__`
@@ -16,7 +16,7 @@ release line:
   `receive_agent_event` for deterministic embedding and UI tests
 
 Names beginning with an underscore remain implementation details. Classes re-exported
-from `cyberdeck.app` for compatibility may move internally while their existing 0.3
+from `cyberdeck.app` for compatibility may move internally while their existing
 imports remain available. The focused modules under `cyberdeck.ui` are implementation
 boundaries, not a stable widget-extension API.
 
@@ -41,7 +41,9 @@ unbounded. Capability-gated steering adapters may raise
 or accepted. Other failures are retained as uncertain and cannot be automatically
 replayed. No additional provider request methods are required.
 
-`cyberdeck.providers.ClaudeAcpAdapter` is the built-in ACP adapter for the maintained
-Claude Agent SDK bridge. Its `deployment` is `anthropic`, `bedrock`, or `vertex`; the
-corresponding public `ClaudeDeployment` type and `claude_environment` helper are also
-exported. These select the inference route without reading or storing credentials.
+`cyberdeck.providers.ClaudeAgentSdkAdapter` is the built-in adapter for Anthropic's
+Python Agent SDK. Its `deployment` is `anthropic`, `bedrock`, or `vertex`; the
+corresponding public `ClaudeDeployment` type, `ClaudeProviderError`, and
+`claude_environment` helper are also exported. The `ClaudeAcpAdapter` name remains an
+alias for source compatibility with Cyberdeck 0.4.0. It no longer starts an ACP
+process. These APIs select the inference route without reading or storing credentials.

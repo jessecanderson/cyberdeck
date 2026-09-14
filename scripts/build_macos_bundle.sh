@@ -57,6 +57,7 @@ EOF
 chmod +x "$BUNDLE_ROOT/cyberdeck-bin/cyberdeck"
 
 "$BUNDLE_ROOT/bin/python3" -c 'import pyexpat; print(pyexpat.EXPAT_VERSION)'
+"$BUNDLE_ROOT/bin/python3" -c 'from importlib.resources import files; cli = files("claude_agent_sdk").joinpath("_bundled", "claude"); assert cli.is_file(), cli'
 test "$("$BUNDLE_ROOT/cyberdeck-bin/cyberdeck" --version)" = "cyberdeck $VERSION"
 ln -s "$BUNDLE_ROOT/cyberdeck-bin/cyberdeck" "$WORK_DIRECTORY/cyberdeck-link"
 test "$("$WORK_DIRECTORY/cyberdeck-link" --version)" = "cyberdeck $VERSION"

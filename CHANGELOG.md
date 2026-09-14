@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## [0.4.1] - 2026-09-14
+
+- Replace the Claude ACP bridge with Anthropic's Python Agent SDK and its bundled
+  native Claude Code runtime. Preserve Anthropic, Bedrock, and Vertex selection,
+  session resume, interruption, ICE permission prompts, streamed output, tool
+  activity, and token usage without requiring Node.js or a separate adapter install.
+
 ## [0.4.0] - 2026-09-14
 
 - Add built-in Claude ACP runtimes for direct Anthropic, Amazon Bedrock, and Google
@@ -285,6 +292,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
+[0.4.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.7...v0.4.0
 [0.3.7]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.6...v0.3.7
 [0.3.6]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.5...v0.3.6

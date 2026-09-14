@@ -5,9 +5,10 @@
 [Changelog](CHANGELOG.md) · [Releases](https://github.com/jessecanderson/cyberdeck/releases) · [Release process](docs/releases.md)
 
 A neon, keyboard-first TUI for running multiple local coding agents. Cyberdeck
-supports Codex through its native App Server transport and Kiro and Claude through
-ACP v1, all over local stdio transports. Claude can use Anthropic directly, Amazon
-Bedrock, or Google Vertex AI while its official tooling continues to own credentials.
+supports Codex through its native App Server transport, Kiro through ACP v1, and
+Claude through Anthropic's bundled Python Agent SDK. Claude can use Anthropic
+directly, Amazon Bedrock, or Google Vertex AI while its official tooling continues
+to own credentials.
 
 The interface uses a restrained, original ODS cyberdeck vocabulary: open agents
 occupy the Local Grid, normalized activity appears in the Grid Trace, permission
@@ -34,10 +35,10 @@ autosave, search, themes, and mixed English/Japanese writing.
 ## Requirements
 
 - Homebrew on Apple Silicon macOS for the recommended standalone installation
-- At least one supported provider CLI installed and authenticated:
+- At least one supported provider configured:
   - Codex: `codex login`
   - Kiro: `kiro-cli login`
-  - Claude: Node.js 22+ and `@agentclientprotocol/claude-agent-acp@0.76.0`
+  - Claude: an existing Claude Code login or Anthropic, AWS, or Google credentials
 - Python 3.11+ only when installing from source or with pipx
 
 ## Install
@@ -56,17 +57,12 @@ kiro-cli login
 kiro-cli --version
 ```
 
-For Claude, install the maintained ACP adapter with Node.js 22 or newer. Authenticate
-with Claude Code for direct Anthropic access, or configure AWS or Google Cloud through
-Claude Code before launching Cyberdeck:
-
-```bash
-npm install -g @agentclientprotocol/claude-agent-acp@0.76.0
-claude-agent-acp --version
-```
-
-Choose `claude`, `claude-bedrock`, or `claude-vertex` in New Uplink or `/new`.
-See [Agent runtimes](docs/runtimes.md#claude) for provider-specific setup.
+Claude support is included with Cyberdeck. No separate Node.js, Claude Code, or ACP
+adapter installation is required. An existing Claude Code login is reused when
+available; direct API, AWS, and Google credentials can be supplied through their
+standard environment and configuration sources. Choose `claude`, `claude-bedrock`,
+or `claude-vertex` in New Uplink or `/new`. See
+[Agent runtimes](docs/runtimes.md#claude) for provider-specific setup.
 
 The recommended macOS installation uses the public Cyberdeck Homebrew tap and
 installs a standalone runtime through a Homebrew formula. It does not use
@@ -116,7 +112,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.4.0/cyberdeck_tui-0.4.0-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.4.1/cyberdeck_tui-0.4.1-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"

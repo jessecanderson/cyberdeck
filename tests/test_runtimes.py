@@ -7,7 +7,7 @@ import pytest
 
 from cyberdeck.config import RuntimeConfig
 from cyberdeck.manager import AgentManager
-from cyberdeck.providers import AcpAgentAdapter, ClaudeAcpAdapter
+from cyberdeck.providers import AcpAgentAdapter, ClaudeAgentSdkAdapter
 from cyberdeck.providers.codex import CodexAppServerAdapter
 from cyberdeck.runtimes import RuntimeRegistry
 
@@ -118,17 +118,14 @@ def test_registry_rejects_native_agent_for_unsupported_runtimes(
     ],
 )
 def test_registry_constructs_claude_deployment_adapter(
-    monkeypatch: pytest.MonkeyPatch,
     runtime_id: str,
     deployment: str,
 ) -> None:
-    monkeypatch.setattr(RuntimeRegistry, "_find_executable", staticmethod(lambda name: name))
-
     adapter = RuntimeRegistry().create(runtime_id)
 
-    assert isinstance(adapter, ClaudeAcpAdapter)
+    assert isinstance(adapter, ClaudeAgentSdkAdapter)
     assert adapter.model_provider == runtime_id
-    assert adapter.command == ("claude-agent-acp",)
+    assert adapter.deployment == deployment
     expected = None if deployment == "anthropic" else f"CLAUDE_CODE_USE_{deployment.upper()}"
     selected = {
         name
@@ -138,61 +135,31 @@ def test_registry_constructs_claude_deployment_adapter(
     assert selected == ({expected} if expected else set())
 
 
-def test_claude_preflight_requires_node_22(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_find_executable",
-        staticmethod(lambda name: f"/opt/bin/{name}"),
-    )
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_version",
-        staticmethod(lambda executable: "v20.17.0" if executable.endswith("node") else "0.76.0"),
-    )
-
-    result = RuntimeRegistry().preflight("claude")
-
-    assert result.available is False
-    assert result.detail == "Node.js 22+ required; found v20.17.0"
-
-
-def test_claude_preflight_reports_adapter_and_cloud_guidance(
+def test_claude_preflight_reports_bundled_sdk_and_cloud_guidance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_find_executable",
-        staticmethod(lambda name: f"/opt/bin/{name}"),
-    )
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_version",
-        staticmethod(lambda executable: "v22.23.2" if executable.endswith("node") else "0.76.0"),
-    )
+    monkeypatch.setattr("cyberdeck.runtimes.version", lambda name: "0.2.152")
 
     result = RuntimeRegistry().preflight("claude-bedrock")
 
     assert result.available is True
-    assert result.version == "0.76.0"
+    assert result.version == "0.2.152"
+    assert "bundled Claude Agent SDK 0.2.152" in result.detail
     assert "AWS credentials, region, and model access" in result.detail
 
 
-def test_claude_preflight_rejects_unvalidated_adapter_release(
+def test_claude_preflight_reports_missing_bundled_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_find_executable",
-        staticmethod(lambda name: f"/opt/bin/{name}"),
-    )
-    monkeypatch.setattr(
-        RuntimeRegistry,
-        "_version",
-        staticmethod(lambda executable: "v22.23.2" if executable.endswith("node") else "0.77.0"),
-    )
+    from importlib.metadata import PackageNotFoundError
+
+    def missing(_name: str) -> str:
+        raise PackageNotFoundError
+
+    monkeypatch.setattr("cyberdeck.runtimes.version", missing)
 
     result = RuntimeRegistry().preflight("claude-vertex")
 
     assert result.available is False
-    assert result.version == "0.77.0"
-    assert result.detail == "Claude ACP 0.76.x required; found 0.77.0"
+    assert result.version is None
+    assert result.detail == "bundled Claude Agent SDK missing; reinstall Cyberdeck"

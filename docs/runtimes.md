@@ -1,8 +1,8 @@
 # Agent runtimes
 
-Cyberdeck owns agent lifecycle through a runtime-neutral manager. Codex uses
-its native App Server adapter; Kiro, Claude, and compatible local agents use the
-shared ACP v1 stdio adapter. ACP is not required for Codex.
+Cyberdeck owns agent lifecycle through a runtime-neutral manager. Codex uses its
+native App Server adapter, Claude uses Anthropic's Python Agent SDK, and Kiro plus
+compatible local agents use the shared ACP v1 stdio adapter.
 
 ## Built-in runtimes
 
@@ -10,9 +10,9 @@ shared ACP v1 stdio adapter. ACP is not required for Codex.
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | `codex` | App Server stdio | yes | yes | yes | yes | yes | yes | yes |
 | `kiro` | ACP v1 stdio | yes | negotiated | no | no | yes | yes | extension |
-| `claude` | ACP v1 stdio | yes | negotiated | no | no | yes | yes | no |
-| `claude-bedrock` | ACP v1 stdio | yes | negotiated | no | no | yes | yes | no |
-| `claude-vertex` | ACP v1 stdio | yes | negotiated | no | no | yes | yes | no |
+| `claude` | bundled Agent SDK | yes | yes | no | no | yes | yes | no |
+| `claude-bedrock` | bundled Agent SDK | yes | yes | no | no | yes | yes | no |
+| `claude-vertex` | bundled Agent SDK | yes | yes | no | no | yes | yes | no |
 
 Kiro resume is available only when its initialize response advertises
 `agentCapabilities.loadSession`. ACP v1 session loading restores provider
@@ -32,16 +32,10 @@ credentials.
 
 ### Claude
 
-All three Claude runtimes use the maintained
-[`@agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp)
-adapter and the official Claude Agent SDK. Cyberdeck accepts the tested `0.76.x`
-adapter release line; its executable is `claude-agent-acp` and it requires Node.js 22
-or newer:
-
-```bash
-npm install -g @agentclientprotocol/claude-agent-acp@0.76.0
-claude-agent-acp --version
-```
+All three Claude runtimes use Anthropic's official Python Agent SDK 0.2.152. Its
+platform wheel bundles the native Claude Code executable, so Cyberdeck users do not
+need to install Node.js, Claude Code, or an ACP bridge separately. The SDK dependency
+is installed with Cyberdeck and included in the standalone macOS bundle.
 
 The runtime choice selects the inference route deterministically:
 
@@ -53,14 +47,16 @@ The runtime choice selects the inference route deterministically:
 
 Cyberdeck injects `CLAUDE_CODE_USE_BEDROCK=1` or `CLAUDE_CODE_USE_VERTEX=1` for
 the corresponding cloud runtime and clears conflicting cloud selectors. The same
-selection is passed through the pinned adapter's programmatic settings tier so a
+selection is passed through the SDK's command-line settings tier so a
 stale user or project setting cannot redirect the session. Managed organization
 policy remains authoritative. Cyberdeck inherits the launching process environment
 so the Claude SDK can use existing provider-owned credentials and settings, but it
 never reads or persists their values.
 
-For direct Anthropic access, authenticate with Claude Code or provide one of its
-documented credential sources, such as `ANTHROPIC_API_KEY`. For Bedrock, configure
+For direct Anthropic access, Cyberdeck reuses an existing Claude Code login when
+available. A new installation can instead provide a documented credential source,
+such as `ANTHROPIC_API_KEY`, without installing Claude Code separately. Cyberdeck
+does not run an interactive browser-login flow. For Bedrock, configure
 the AWS default credential chain and optionally `AWS_PROFILE` and `AWS_REGION`; the
 runtime sets the Bedrock selector itself. For Vertex, configure Application Default
 Credentials, `ANTHROPIC_VERTEX_PROJECT_ID`, and `CLOUD_ML_REGION`; the runtime sets
@@ -75,9 +71,10 @@ Examples:
 /new wintermute claude-vertex ~/src/project
 ```
 
-Claude advertises ACP session loading, permissions, cancellation, and tool events.
-ACP v1 does not standardize compaction or active-turn steering, so follow-ups use
-Cyberdeck's FIFO continuation queue and `/compact` remains unavailable.
+The Agent SDK provides session loading, permission callbacks, cancellation, streamed
+messages, and tool events. Cyberdeck keeps follow-ups in its FIFO continuation queue
+until active-turn SDK input has a separately tested product contract. `/compact`
+remains unavailable.
 
 ## Selecting a runtime
 
@@ -146,8 +143,8 @@ extend Cyberdeck itself; native definitions configure the owning provider harnes
 ### Steering and queued input
 
 Submitting more input while Codex is working steers its active turn through App
-Server. ACP v1 has no equivalent steering request, so Cyberdeck queues additional
-Kiro, Claude, or generic ACP prompts per uplink and sends them in order whenever
+Server. Cyberdeck queues additional Kiro, Claude, or generic ACP prompts per uplink
+and sends them in order whenever
 that agent returns to `READY`, in the same session. Each submission keeps its exact text and
 is bound to the agent selected when Enter is pressed. Steering during an approval
 hold does not approve or bypass the hold. A starting Codex turn waits for its ID
@@ -211,7 +208,7 @@ Context compaction is capability-gated as well. Codex uses
 with the `/compact` command. Generic ACP v1 runtimes are marked unavailable
 because ACP does not standardize context compaction. `/clear` remains a
 Cyberdeck display operation and never implies provider-side context deletion.
-Cyberdeck 0.4.0 intentionally does not offer a destructive provider-context
+Cyberdeck 0.4.1 intentionally does not offer a destructive provider-context
 reset command: starting a fresh provider session remains an explicit new-uplink
 operation. Successful compaction preserves the active agent identity and local
 transcript; failures leave the agent visibly recoverable instead of guessing a
