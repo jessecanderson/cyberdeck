@@ -193,6 +193,52 @@ async def test_claude_stream_tool_and_usage_mapping(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_claude_groups_stream_envelopes_into_one_assistant_message(
+    tmp_path: Path,
+) -> None:
+    session_id = "00000000-0000-4000-8000-000000000001"
+    responses = [
+        StreamEvent(
+            uuid="stream-envelope-1",
+            session_id=session_id,
+            event={
+                "type": "message_start",
+                "message": {"id": "claude-message-1", "model": "claude-test"},
+            },
+        ),
+        StreamEvent(
+            uuid="stream-envelope-2",
+            session_id=session_id,
+            event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": "One"}},
+        ),
+        StreamEvent(
+            uuid="stream-envelope-3",
+            session_id=session_id,
+            event={"type": "content_block_delta", "delta": {"type": "text_delta", "text": " line"}},
+        ),
+        AssistantMessage(
+            [TextBlock("One line")],
+            "claude-test",
+            message_id="claude-message-1",
+            uuid="transcript-entry-1",
+        ),
+        result(),
+    ]
+    adapter, _ = adapter_with(responses)
+    await adapter.start(tmp_path)
+
+    await adapter.send("respond")
+
+    events = [await adapter._events.get() for _ in range(5)]
+    assistant_events = [event for event in events if event and event.kind == "assistant_delta"]
+    assert [(event.text, event.message_id) for event in assistant_events] == [
+        ("One", "claude-message-1"),
+        (" line", "claude-message-1"),
+    ]
+    await adapter.stop()
+
+
+@pytest.mark.asyncio
 async def test_claude_uses_complete_text_when_partial_stream_is_absent(tmp_path: Path) -> None:
     adapter, _ = adapter_with(
         [

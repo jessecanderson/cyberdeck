@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## [0.4.2] - 2026-09-14
+
+- Keep Claude partial-response chunks in one transcript message even when the Agent
+  SDK assigns a different envelope UUID to each streamed event.
+
 ## [0.4.1] - 2026-09-14
 
 - Replace the Claude ACP bridge with Anthropic's Python Agent SDK and its bundled
@@ -292,6 +297,7 @@ All notable changes to Cyberdeck are documented here. The project follows
 - Inline ICE permission gates and normalized operation telemetry.
 - Agent switcher, prompt history, themes, system manifest, and package CI.
 
+[0.4.2]: https://github.com/jessecanderson/cyberdeck/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/jessecanderson/cyberdeck/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.7...v0.4.0
 [0.3.7]: https://github.com/jessecanderson/cyberdeck/compare/v0.3.6...v0.3.7
