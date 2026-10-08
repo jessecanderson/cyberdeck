@@ -47,3 +47,13 @@ corresponding public `ClaudeDeployment` type, `ClaudeProviderError`, and
 `claude_environment` helper are also exported. The `ClaudeAcpAdapter` name remains an
 alias for source compatibility with Cyberdeck 0.4.0. It no longer starts an ACP
 process. These APIs select the inference route without reading or storing credentials.
+
+Cyberdeck 0.4.3 adds defaulted presentation fields `follow_output` and
+`operation_filter` to `AgentState`, plus `DispatchRun` and `DispatchTarget` domain
+values. `AgentManager.dispatch` retains its per-callsign return mapping and exposes
+bounded process-local `dispatch_runs`. `update_dispatch` handles normalized terminal
+events; `retry_dispatch` creates a separate target-only attempt and rejects uncertain
+delivery. `pause_queue`, `edit_queue`, `remove_queued`, and `move_queued` operate only
+on confirmed-unsent input; editing requires a paused queue. `restore` adds an
+optional keyword-only `native_agent` to preserve session identity. Adapter factories
+and Module API v1 are unchanged. `DeckConfig.remember_sessions` defaults to false.

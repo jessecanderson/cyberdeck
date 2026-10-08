@@ -1594,6 +1594,8 @@ async def test_queue_commands_and_completion_exclude_uncertain_delivery():
         await pilot.app.present_agent(state, select=True)
         await pilot.pause()
         assert [word for word, _ in pilot.app._complete("/queue ")] == [
+            "edit",
+            "pause",
             "resume",
             "clear",
         ]

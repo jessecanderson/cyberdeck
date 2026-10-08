@@ -161,7 +161,7 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #theme-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #about-dialog { width: 76; max-width: 94%; height: 34; padding: 1 2; background: $surface; border: double $cyan; }
 #about-title { height: 3; color: $cyan; text-style: $deck-heading-style; content-align: center middle; border-bottom: solid $primary-muted; }
-#about-content { height: 1fr; padding: 1 2; color: $foreground; }
+#about-content { height: auto; padding: 1 2; color: $foreground; }
 #confirm-dialog { height: 12; border: double $red; }
 #control-dialog { height: 27; }
 #switch-dialog { width: 96; height: 70%; border: double $magenta; }
@@ -184,3 +184,31 @@ SpawnAgent, HelpScreen, AboutScreen, RestoreScreen, OperationDetail, ConfirmScre
 #command-palette-list > ListItem { height: 3; padding: 0 1; color: $muted; }
 #control-list > ListItem.--highlight, #switch-list > ListItem.--highlight, #dispatch-list > ListItem.--highlight, #command-palette-list > ListItem.--highlight { background: #102832; color: $cyan; border-left: thick $magenta; }
 #dispatch-help { height: 2; color: $muted; content-align: center middle; }
+
+.workflow-dialog {
+    width: 85%;
+    max-width: 120;
+    height: 85%;
+    border: solid $primary;
+    background: $surface;
+    padding: 1 2;
+}
+SearchPicker, TranscriptSearch, QueueScreen, ResultsScreen {
+    align: center middle;
+    background: $background 80%;
+}
+.workflow-dialog > Label { height: 2; color: $primary; }
+#workflow-search { height: 3; }
+#workflow-list, #results-list, #queue-list { height: 1fr; }
+#queue-editor { height: 1fr; }
+#queue-uncertain { height: 6; border-top: solid $warning; }
+#results-detail-scroll { height: 1fr; border-top: solid $primary; }
+#about-scroll { height: 1fr; }
+
+#workflow-list > ListItem, #queue-list > ListItem, #results-list > ListItem {
+    height: auto;
+    min-height: 2;
+    padding: 0 1;
+}
+#workflow-list > ListItem.--highlight, #queue-list > ListItem.--highlight,
+#results-list > ListItem.--highlight { background: $primary-muted; border-left: thick $primary; }

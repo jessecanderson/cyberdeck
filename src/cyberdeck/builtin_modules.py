@@ -5,11 +5,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from textual.app import ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical
 from textual.widget import Widget
 from textual.widgets import Input, ListView, Static, TextArea
 
 from .modules import DeckCommand, DeckModule, ModuleInputMode, ModuleManifest
+from .ui.conversation import ConversationView, OperationsView
 
 
 class AgentsWorkspace(Vertical):
@@ -25,10 +26,10 @@ class AgentsWorkspace(Vertical):
                 yield Static(id="agent-cwd")
             yield Static("CARRIER // 通信 ··· OFFLINE", id="signal-trace")
         yield Static(id="state-transition")
-        yield VerticalScroll(id="conversation")
+        yield ConversationView(id="conversation")
         with Vertical(id="operations-console"):
             yield Static("GRID TRACE // LIVE OPERATIONS", id="operations-title")
-            yield ListView(id="operations-list")
+            yield OperationsView(id="operations-list")
 
 
 class JournalWorkspace(Vertical):

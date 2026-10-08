@@ -43,10 +43,29 @@ def _queue(_app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult
     return [
         (action, description)
         for action, description in (
+            ("edit", "pause and edit confirmed-unsent input"),
+            ("pause", "pause automatic queue delivery"),
             ("resume", "resume confirmed-unsent input when READY"),
             ("clear", "discard pending and uncertain input"),
         )
         if action.startswith(prefix) and action != prefix
+    ]
+
+
+def _workflow_options(_app: CyberdeckApp, value: str, words: list[str]) -> CompletionResult:
+    options = {
+        "/follow": ("on", "off"),
+        "/sessions": ("on", "off", "reset"),
+        "/preferences": ("reset",),
+        "/operations": ("all", "failed", "files"),
+    }
+    if not words or words[0] not in options or len(words) > 2:
+        return None
+    prefix = "" if value.endswith(" ") else (words[1] if len(words) == 2 else "")
+    return [
+        (option, f"{words[0]} {option}")
+        for option in options[words[0]]
+        if option.startswith(prefix) and option != prefix
     ]
 
 
@@ -239,6 +258,7 @@ def _path(_app: CyberdeckApp, value: str, _words: list[str]) -> CompletionResult
 COMPLETION_RULES: tuple[CompletionRule, ...] = (
     _command_names,
     _queue,
+    _workflow_options,
     _density,
     _module_action,
     _module_record,
