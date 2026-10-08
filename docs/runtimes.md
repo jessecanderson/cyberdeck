@@ -217,3 +217,12 @@ provider-specific reset request.
 Dispatch can mix ready Codex, Kiro, Claude, and configured ACP agents. Each send is an
 independent turn; partial failures remain isolated and are never rolled back on
 successful targets.
+
+## Runtime diagnostics
+
+`/runtimes` refreshes credential-free executable/SDK preflight outside the UI
+thread and lists the actual negotiated capabilities of connected agents. `/about`
+includes cached provider versions, availability, and negotiated capability names in
+its scrollable diagnostic export. These views do not include environment values,
+credentials, prompts, transcripts, raw provider errors, or approval payloads.
+Preflight availability does not prove authentication or remote model access.

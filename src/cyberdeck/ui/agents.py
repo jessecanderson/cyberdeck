@@ -39,6 +39,7 @@ class SpawnAgent(ModalScreen[SpawnRequest | None]):
         default_runtime: str = "codex",
         *,
         catalog_loader: Callable[[Path], NativeAgentCatalog] = discover_native_agents,
+        workspace: Path | None = None,
     ) -> None:
         super().__init__()
         self.runtimes = runtimes or (
@@ -47,6 +48,7 @@ class SpawnAgent(ModalScreen[SpawnRequest | None]):
         )
         self.default_runtime = default_runtime
         self.catalog_loader = catalog_loader
+        self.workspace = workspace or Path.cwd()
         self.catalog = NativeAgentCatalog()
         self._catalog_workspace: Path | None = None
         self.filtered: list[NativeAgent | None] = [None]
@@ -58,7 +60,7 @@ class SpawnAgent(ModalScreen[SpawnRequest | None]):
             yield Label("ODS // INITIALIZE UPLINK", id="spawn-title")
             yield Input(placeholder="Callsign", id="spawn-agent-name")
             yield Input(
-                value=str(Path.cwd()), placeholder="Working directory", id="spawn-agent-path"
+                value=str(self.workspace), placeholder="Working directory", id="spawn-agent-path"
             )
             yield Input(
                 value=self.default_runtime,

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## [0.4.3] - 2026-10-08
+
+- Preserve journal edits after failed saves, detect external file changes, save
+  the correct day during date navigation, and retain editor text in quick entries.
+- Reuse transcript and operation widgets, add F8 output-follow control, and add
+  Ctrl+F searchable transcript navigation plus failed/file operation filters.
+- Add per-target dispatch results, timestamps, failure inspection, transcript
+  navigation, and confirmed retries that preserve successful targets and refuse
+  automatic replay of uncertain input.
+- Remember recent workspaces and optionally resumable session references; provide
+  metadata inspection/reset and safe preference reset without persisting prompts,
+  transcripts, credentials, drafts, queued input, or approval payloads.
+- Add a paused queue editor for changing, removing, and reordering confirmed-unsent
+  input while keeping uncertain deliveries read-only.
+- Expand runtime diagnostics with actual negotiated capabilities across providers.
+- Move journal behavior, module lifecycle, rendering, and workflow inspection into
+  focused UI owners while retaining compatibility methods and exports.
+- Refresh project guidance and document completed scope and deferred roadmap work.
+
 ## [0.4.2] - 2026-09-14
 
 - Keep Claude partial-response chunks in one transcript message even when the Agent

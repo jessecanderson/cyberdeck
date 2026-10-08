@@ -27,6 +27,16 @@ providers must not depend on Textual widgets or application screens.
 - `builtin_modules.py` contains retained built-in workspace widgets and their typed
   module specification.
 - `clipboard.py` owns platform and terminal clipboard selection and error conversion.
+- `session_store.py` persists bounded, schema-versioned metadata only: recent paths,
+  opt-in resumable references, and dispatch outcomes without conversation content.
+- `ui/conversation.py` owns incremental transcript and operation widgets;
+  `ui/workflows.py` owns queue, search, and dispatch-result modals.
+- `ui/journal.py`, `ui/module_lifecycle.py`, and `ui/workflow_actions.py` own focused
+  application UI behaviors. These internal mixins preserve existing application
+  methods; decorated journal event handlers are registered on the concrete app
+  because Textual collects handlers there.
+- Dispatch state belongs in `domain.py`; completion and queue mutation belong in
+  `manager.py`, using normalized events rather than provider send-return timing.
 - `app.py` is the Textual composition root. It owns widget composition, application
   coordination, and callbacks, but protocol parsing and command parsing do not live
   there.

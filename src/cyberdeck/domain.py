@@ -172,6 +172,8 @@ class AgentState:
     uncertain_prompts: list[str] = field(default_factory=list)
     queue_paused: bool = False
     cancellation_pending: bool = False
+    follow_output: bool = True
+    operation_filter: str = "all"
 
     def transition_to(
         self,
@@ -282,3 +284,30 @@ def operation_from_item(item: dict[str, Any], created_at: datetime | None = None
         arguments=item.get("arguments") or item.get("params") or {},
         error=item.get("error"),
     )
+
+
+@dataclass(slots=True)
+class DispatchTarget:
+    agent_id: str
+    callsign: str
+    provider: str
+    status: str = "sending"
+    started_at: datetime = field(default_factory=current_time)
+    finished_at: datetime | None = None
+    error: str | None = None
+
+    @property
+    def elapsed_seconds(self) -> float:
+        return max(0, ((self.finished_at or current_time()) - self.started_at).total_seconds())
+
+
+@dataclass(slots=True)
+class DispatchRun:
+    prompt: str
+    targets: list[DispatchTarget]
+    id: str = field(default_factory=lambda: str(uuid4()))
+    created_at: datetime = field(default_factory=current_time)
+
+    @property
+    def complete(self) -> bool:
+        return all(target.finished_at is not None for target in self.targets)

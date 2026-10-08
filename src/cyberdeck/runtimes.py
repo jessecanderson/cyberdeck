@@ -3,11 +3,12 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from .config import RuntimeConfig
+from .domain import AgentCapabilities
 from .providers import (
     AcpAgentAdapter,
     AgentAdapter,
@@ -223,3 +224,11 @@ class RuntimeRegistry:
             return None
         text = (result.stdout or result.stderr).strip().splitlines()
         return text[0][:120] if text else None
+
+
+def capability_summary(capabilities: AgentCapabilities) -> str:
+    """Describe negotiated booleans without inferring unsupported provider methods."""
+    return (
+        ", ".join(field.name for field in fields(capabilities) if getattr(capabilities, field.name))
+        or "none"
+    )

@@ -11,10 +11,13 @@ from .domain import (
     AgentConfig,
     AgentState,
     AgentStatus,
+    DispatchRun,
+    DispatchTarget,
     HistoryPage,
     PendingApproval,
     ThreadSummary,
     TranscriptEntry,
+    current_time,
 )
 from .event_reducer import apply_agent_event
 from .native_agents import NativeAgentCatalog, discover_native_agents
@@ -40,6 +43,7 @@ class AgentManager:
         self._completion: dict[str, asyncio.Event] = {}
         self._reserved: dict[str, tuple[asyncio.Task[None], str]] = {}
         self.agents: list[AgentState] = []
+        self.dispatch_runs: list[DispatchRun] = []
         self._adapters: dict[str, AgentAdapter] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
         self._send_tasks: dict[str, asyncio.Task[None]] = {}
@@ -163,7 +167,9 @@ class AgentManager:
                     await self._failed_connect(state, adapter)
                 raise
 
-    async def restore(self, summary: ThreadSummary, name: str | None = None) -> AgentState:
+    async def restore(
+        self, summary: ThreadSummary, name: str | None = None, *, native_agent: str | None = None
+    ) -> AgentState:
         callsign = (name or summary.name or "").strip()
         if not callsign:
             raise ValueError("A callsign is required for unnamed threads")
@@ -173,12 +179,13 @@ class AgentManager:
             callsign,
             summary.cwd,
             provider=summary.provider,
+            native_agent=native_agent,
             status=AgentStatus.RESTORING,
         )
         state.thread_id = summary.id
         state.restored = True
         state.current_activity = "hydrating archived turns"
-        adapter = self._new_adapter(summary.provider)
+        adapter = self._new_adapter(summary.provider, native_agent)
         self.attach_adapter(state, adapter)
         async with self._own_task(state):
             try:
@@ -453,6 +460,7 @@ class AgentManager:
         state.context_percentage = None
 
     async def _remove(self, state: AgentState) -> None:
+        self.update_dispatch(state, AgentEvent("transport_closed", "Agent disconnected"))
         key = str(state.config.id)
         await self._cancel_owned(key)
         await self._cancel_pump(key)
@@ -529,22 +537,114 @@ class AgentManager:
         ]
         if blocked:
             raise ValueError("Unavailable targets: " + ", ".join(blocked))
-        results = await asyncio.gather(
-            *(self.send(state, prompt) for state in targets), return_exceptions=True
+        if len({state.config.id for state in targets}) != len(targets):
+            raise ValueError("Dispatch targets must be distinct")
+        run = DispatchRun(
+            prompt,
+            [
+                DispatchTarget(str(state.config.id), state.config.name, state.config.provider)
+                for state in targets
+            ],
         )
-        summary: dict[str, str | None] = {}
-        for state, result in zip(targets, results, strict=True):
-            if isinstance(result, BaseException):
-                # Dispatch is an explicit fan-out record: retain the attempted prompt on
-                # every target even though ordinary rejected sends are rolled back.
-                state.transcript.append(TranscriptEntry("user", prompt))
-                state.status = AgentStatus.ERROR
-                state.current_activity = "dispatch failed"
-                state.error_message = str(result)
-                summary[state.config.name] = str(result)
-            else:
-                summary[state.config.name] = None
-        return summary
+        self.dispatch_runs.append(run)
+        self.dispatch_runs[:] = self.dispatch_runs[-50:]
+        results = await asyncio.gather(
+            *(
+                self._dispatch_target(state, prompt, result)
+                for state, result in zip(targets, run.targets, strict=True)
+            )
+        )
+        return {state.config.name: result for state, result in zip(targets, results, strict=True)}
+
+    async def _dispatch_target(
+        self, state: AgentState, prompt: str, target: DispatchTarget
+    ) -> str | None:
+        try:
+            await self.send(state, prompt)
+        except (Exception, asyncio.CancelledError) as exc:
+            target.status, target.error = "failed", str(exc) or "Delivery cancelled"
+            target.finished_at = current_time()
+            state.transcript.append(TranscriptEntry("user", prompt))
+            state.status = AgentStatus.ERROR
+            state.current_activity = "dispatch failed"
+            state.error_message = target.error
+            self._on_event(state, AgentEvent("dispatch_updated"))
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return target.error
+        if target.finished_at is None:
+            target.status = "running"
+        self._on_event(state, AgentEvent("dispatch_updated"))
+        return None
+
+    def update_dispatch(self, state: AgentState, event: AgentEvent) -> None:
+        """Apply completion independently of provider send-return semantics."""
+        if event.kind not in {"status", "error", "transport_closed"}:
+            return
+        for run in reversed(self.dispatch_runs):
+            for target in run.targets:
+                if target.agent_id != str(state.config.id) or target.finished_at is not None:
+                    continue
+                if event.kind in {"error", "transport_closed"}:
+                    target.status, target.error = "failed", event.text
+                elif event.text == "ready":
+                    target.status = "cancelled" if state.cancellation_pending else "completed"
+                else:
+                    return
+                target.finished_at = current_time()
+                return
+
+    async def retry_dispatch(self, run: DispatchRun, target: DispatchTarget) -> None:
+        state = next((a for a in self.agents if str(a.config.id) == target.agent_id), None)
+        if state is None or target.status != "failed" or not run.prompt:
+            raise ValueError("Retry requires a failed target with its original prompt available")
+        if state.uncertain_prompts:
+            raise ValueError(
+                "Review uncertain deliveries in /queue and explicitly resubmit if needed"
+            )
+        if state.status is not AgentStatus.READY:
+            raise ValueError("Recover the agent with /retry before retrying this target")
+        if any(
+            result.agent_id == target.agent_id and result.finished_at is None
+            for attempt in self.dispatch_runs
+            for result in attempt.targets
+        ):
+            raise ValueError("This target already has an active dispatch")
+        # A retry is a separate attributed attempt; successful targets are never repeated.
+        attempt = DispatchRun(
+            run.prompt,
+            [DispatchTarget(str(state.config.id), state.config.name, state.config.provider)],
+        )
+        self.dispatch_runs.append(attempt)
+        self.dispatch_runs[:] = self.dispatch_runs[-50:]
+        await self._dispatch_target(state, run.prompt, attempt.targets[0])
+
+    def pause_queue(self, state: AgentState) -> None:
+        state.queue_paused = True
+        reservation = self._reserved.pop(str(state.config.id), None)
+        if reservation:
+            reservation[0].cancel()
+            state.queued_prompts.insert(0, reservation[1])
+            state.status = AgentStatus.READY
+
+    def edit_queue(self, state: AgentState, index: int, text: str) -> None:
+        if not state.queue_paused:
+            raise ValueError("Pause the queue before editing")
+        if not text.strip():
+            raise ValueError("Pending input cannot be empty")
+        state.queued_prompts[index] = text
+
+    def remove_queued(self, state: AgentState, index: int) -> None:
+        if not state.queue_paused:
+            raise ValueError("Pause the queue before editing")
+        state.queued_prompts.pop(index)
+
+    def move_queued(self, state: AgentState, index: int, direction: int) -> int:
+        if not state.queue_paused:
+            raise ValueError("Pause the queue before editing")
+        destination = max(0, min(len(state.queued_prompts) - 1, index + direction))
+        state.queued_prompts.insert(destination, state.queued_prompts.pop(index))
+        return destination
 
     async def respond_approval(
         self, state: AgentState, request_id: int | str, decision: str
@@ -601,6 +701,7 @@ class AgentManager:
                 # an uncertain transport safe to use again.
                 if state.status is AgentStatus.ERROR:
                     continue
+                self.update_dispatch(state, event)
                 apply_agent_event(state, event)
                 if (
                     event.kind == "status" and event.text == "ready"
@@ -617,7 +718,9 @@ class AgentManager:
             state.status = AgentStatus.ERROR
             state.current_activity = "event pump failed"
             state.error_message = str(exc)
-            self._on_event(state, AgentEvent("error", f"event pump failed: {exc}"))
+            event = AgentEvent("error", f"event pump failed: {exc}")
+            self.update_dispatch(state, event)
+            self._on_event(state, event)
 
     def _schedule_queue(self, state: AgentState) -> None:
         if (

@@ -46,6 +46,7 @@ class DeckConfig:
     show_boot: bool = True
     density: str = "standard"
     schema_version: int = CONFIG_SCHEMA_VERSION
+    remember_sessions: bool = False
 
     @property
     def journal_path(self) -> Path:
@@ -81,6 +82,7 @@ class ConfigStore:
             "[journal]\n"
             f'directory = "{_escape(journal)}"\n'
             "\n[agents]\n"
+            f"remember_sessions = {'true' if config.remember_sessions else 'false'}\n"
             f'default_runtime = "{_escape(config.default_runtime)}"\n'
             f'approval_policy = "{_escape(config.approval_policy)}"\n'
             f'sandbox = "{_escape(config.sandbox_mode)}"\n'
@@ -114,6 +116,9 @@ def parse_config(data: Mapping[str, Any], errors: list[str]) -> DeckConfig:
         active_module=str(deck.get("module", "agents")),
         journal_directory=(
             Path(str(configured_journal)).expanduser() if configured_journal else None
+        ),
+        remember_sessions=_boolean(
+            agents.get("remember_sessions", False), "remember_sessions", False, errors
         ),
         default_runtime=str(agents.get("default_runtime", "codex")).casefold(),
         runtimes=_parse_runtimes(migrated.get("runtimes", ()), errors),

@@ -37,10 +37,19 @@ BUILTIN_COMMANDS = (
     CommandSpec("/agent", "open Operative Control"),
     CommandSpec("/rename", "persist a new callsign", handler="control"),
     CommandSpec("/interrupt", "interrupt the active turn", handler="control"),
-    CommandSpec("/queue", "inspect, resume, or clear pending input", append_space=True),
+    CommandSpec(
+        "/queue", "inspect, edit, pause, resume, or clear pending input", append_space=True
+    ),
     CommandSpec("/retry", "restore an errored uplink", handler="control"),
     CommandSpec("/disconnect", "reversibly close the active uplink", handler="control"),
     CommandSpec("/archive", "archive and close the active uplink", handler="control"),
+    CommandSpec("/results", "inspect dispatch outcomes and retry a failed target"),
+    CommandSpec("/recent", "select a recent workspace for new uplinks"),
+    CommandSpec("/sessions", "inspect saved sessions: on|off|reset", append_space=True),
+    CommandSpec("/preferences", "inspect or reset safe preferences", append_space=True),
+    CommandSpec("/search", "search loaded transcript messages", append_space=True),
+    CommandSpec("/follow", "toggle or set output following: on|off", append_space=True),
+    CommandSpec("/operations", "filter operation trace: all|failed|files", append_space=True),
     CommandSpec("/dispatch", "transmit to multiple ready agents"),
     CommandSpec("/send", "send a prompt to one ready agent", handler="route"),
     CommandSpec(
@@ -63,7 +72,11 @@ BUILTIN_COMMANDS = (
         "show or set workspace density: standard|compact",
         append_space=True,
     ),
-    CommandSpec("/journal", "open a dated journal entry", handler="deck_module"),
+    CommandSpec(
+        "/journal",
+        "open a date or confirm reloading from disk: /journal [DATE|reload]",
+        handler="deck_module",
+    ),
     CommandSpec("/today", "open today's journal entry", handler="deck_module"),
     CommandSpec("/save", "save the active journal entry", handler="deck_module"),
     CommandSpec("/about", "open system manifest"),

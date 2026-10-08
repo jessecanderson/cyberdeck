@@ -41,6 +41,16 @@ async def benchmark(messages: int, operations: int) -> None:
         await pilot.pause()
         elapsed = perf_counter() - started
         print(f"messages={messages} operations={operations} render_seconds={elapsed:.4f}")
+        started = perf_counter()
+        app._render_active(follow_end=False)
+        await pilot.pause()
+        print(f"settled_refresh_seconds={perf_counter() - started:.4f}")
+        if state.transcript:
+            started = perf_counter()
+            state.transcript[-1].text += " streamed update"
+            app._render_active(follow_end=False)
+            await pilot.pause()
+            print(f"stream_update_seconds={perf_counter() - started:.4f}")
 
 
 def main() -> None:

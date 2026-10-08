@@ -112,7 +112,7 @@ VENV="$HOME/.local/share/cyberdeck/venv"
 "$PYTHON_BIN" -m venv --clear "$VENV"
 "$VENV/bin/python" -m pip install --upgrade pip
 "$VENV/bin/python" -m pip install \
-  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.4.2/cyberdeck_tui-0.4.2-py3-none-any.whl"
+  "https://github.com/jessecanderson/cyberdeck/releases/download/v0.4.3/cyberdeck_tui-0.4.3-py3-none-any.whl"
 
 mkdir -p "$HOME/.local/bin"
 ln -sfn "$VENV/bin/cyberdeck" "$HOME/.local/bin/cyberdeck"
@@ -192,7 +192,7 @@ agents.
 Local commands begin with `/` and are handled by Cyberdeck rather than sent to
 the active module. Start with `/help`; current commands include `/new`,
 `/restore`, `/agents`, `/runtimes`, `/agent`, `/rename`, `/interrupt`, `/retry`,
-`/disconnect`, `/archive`, `/queue [resume|clear]`, `/dispatch`, `/switch`, `/module`, `/next-module`,
+`/disconnect`, `/archive`, `/queue [edit|pause|resume|clear]`, `/dispatch`, `/switch`, `/module`, `/next-module`,
 `/theme`, `/journal`, `/context`, `/compact`, `/older`, `/clear`, `/path`, and
 `/quit`. The help window is scrollable and includes commands contributed by
 loaded modules. While autocomplete is visible, use Up/Down to highlight an
@@ -237,6 +237,38 @@ slash-command attempts fail without sending an invalid protocol request. See
 [Agent runtimes](docs/runtimes.md) for custom ACP commands, configuration,
 preflight behavior, and current provider limitations.
 
+## Workflow inspection and continuity
+
+- `F8` or `/follow [on|off]` controls whether new output scrolls to the end.
+  Turn following off to hold your reading position during streaming.
+- `Ctrl+F` or `/search TEXT` searches loaded transcript messages. Up/Down moves
+  between matches; Enter jumps to a message and holds your reading position.
+  `/older` loads additional searchable history where supported.
+- `/operations all|failed|files` filters the Grid Trace. Enter opens the selected
+  operation, including its full output and details.
+- `/results` opens dispatch outcomes with each target's status, elapsed time, and
+  failure reason. Enter opens a live target's transcript. Ctrl+R offers a confirmed,
+  target-only retry after recovery; uncertain deliveries require transcript review
+  and explicit resubmission. Successful targets are never repeated.
+- `/queue edit` pauses automatic delivery and opens a pending-input editor. Enter
+  selects a prompt; Ctrl+S saves edits, Ctrl+D removes it, Ctrl+Up/Down reorders,
+  and Ctrl+R resumes when READY. Escape closes while keeping the queue paused.
+  Uncertain deliveries appear separately and cannot be edited or replayed here.
+- `/recent` selects a recent workspace as the default for New Uplink and `/new`.
+- `/sessions on` opts into remembering resumable session references and callsigns.
+  `/sessions` searches those references and restores only the selected session;
+  startup never reconnects automatically. `/sessions off` disables and clears them.
+- `/preferences` inspects safe settings; `/preferences reset` resets boot, density,
+  default runtime, workspace, and session retention after confirmation.
+  `/sessions reset` clears saved workspace, session, and dispatch metadata.
+
+Metadata is stored beside `config.toml` in `config.state.json`, with limits of
+20 workspaces, 50 session references, and 50 dispatch runs. Dispatch IDs, provider,
+status, and timestamps survive restart; prompts, transcripts, drafts, queued input,
+raw failure messages, credentials, and approval payloads are never included.
+Interrupted dispatch records become UNKNOWN on the next launch and cannot retry
+without their process-local prompt. See [workflow behavior](docs/workflows.md).
+
 ## Deck modules
 
 Cyberdeck is organized as a permanent deck shell with switchable workspaces.
@@ -252,6 +284,11 @@ when Journal opens; use `Ctrl+L` for the deck command line, Escape to return to
 the editor, and `Ctrl+S` to save immediately. Ordinary deck-prompt text becomes
 a timestamped quick entry while Journal is active. Use `/journal YYYY-MM-DD`,
 `/today`, and `/save` for direct control.
+
+If saving fails, date navigation, module switching, and normal quit preserve the
+editor and report the failure. Saves detect changes made outside Cyberdeck and
+leave both versions intact. Copy your edits, then use `/journal reload` to confirm
+discarding the buffer and load the external version.
 
 Journal files are UTF-8 and support Japanese and mixed-language writing,
 rendering, reload, and normalized content search. IME composition and glyph

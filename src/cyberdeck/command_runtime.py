@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import shlex
 from collections.abc import Callable
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .commands import COMMANDS_BY_NAME
+from .runtimes import capability_summary
 from .ui.screens import AboutScreen, ConfirmScreen, HelpScreen
 
 if TYPE_CHECKING:
@@ -44,8 +46,9 @@ def _help(app: CyberdeckApp, _args: list[str], _command: str) -> None:
     app.push_screen(HelpScreen(app._all_local_commands()))
 
 
-def _about(app: CyberdeckApp, _args: list[str], _command: str) -> None:
-    app.push_screen(AboutScreen(app._system_manifest()))
+async def _about(app: CyberdeckApp, _args: list[str], _command: str) -> None:
+    manifest = await asyncio.to_thread(app._system_manifest)
+    app.push_screen(AboutScreen(manifest))
 
 
 def _restore(app: CyberdeckApp, _args: list[str], _command: str) -> None:
@@ -161,14 +164,18 @@ def _switch(app: CyberdeckApp, args: list[str], _command: str) -> None:
         app._switch_result(target)
 
 
-def _runtimes(app: CyberdeckApp, _args: list[str], _command: str) -> None:
+async def _runtimes(app: CyberdeckApp, _args: list[str], _command: str) -> None:
     rows = []
-    for runtime in app.manager.runtime_preflights(refresh=True):
+    preflights = await asyncio.to_thread(app.manager.runtime_preflights, refresh=True)
+    for runtime in preflights:
         marker = "READY" if runtime.available else "OFFLINE"
         version = f" // {runtime.version}" if runtime.version else ""
         rows.append(
             f"{runtime.runtime_id:<12} [{marker}] {runtime.label}{version}\n  {runtime.detail}"
         )
+    for state in app.manager.agents:
+        supported = capability_summary(state.capabilities)
+        rows.append(f"{state.config.name} [{state.config.provider}] negotiated: {supported}")
     app._write_local("RUNTIME MATRIX\n" + "\n".join(rows))
 
 
@@ -367,8 +374,13 @@ def _queue(app: CyberdeckApp, args: list[str], _command: str) -> None:
     if state is None:
         app._write_local("No active uplink.")
         return
-    if args not in ([], ["resume"], ["clear"]):
-        app._write_local("usage: /queue [resume|clear]")
+    if args == ["edit"]:
+        app.action_queue_editor()
+        return
+    if args == ["pause"]:
+        app.manager.pause_queue(state)
+    elif args not in ([], ["resume"], ["clear"]):
+        app._write_local("usage: /queue [edit|pause|resume|clear]")
         return
     if args == ["resume"]:
         try:
@@ -391,8 +403,53 @@ def _queue(app: CyberdeckApp, args: list[str], _command: str) -> None:
     app._refresh_all()
 
 
+def _results(app: CyberdeckApp, _args: list[str], _command: str) -> None:
+    app.action_dispatch_results()
+
+
+def _recent(app: CyberdeckApp, _args: list[str], _command: str) -> None:
+    app.show_recent_workspaces()
+
+
+def _sessions(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    app.session_command(args)
+
+
+def _preferences(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    app.preferences_command(args)
+
+
+def _search(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    app.search_transcript(" ".join(args))
+
+
+def _follow(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    state = app.active_agent()
+    if state is None:
+        app._write_local("No active uplink.")
+    elif args not in ([], ["on"], ["off"]):
+        app._write_local("usage: /follow [on|off]")
+    elif not args:
+        app.action_follow_output()
+    else:
+        state.follow_output = args == ["on"]
+        app._render_active()
+
+
+def _operations(app: CyberdeckApp, args: list[str], _command: str) -> None:
+    state = app.active_agent()
+    if state is None:
+        app._write_local("No active uplink.")
+    elif len(args) != 1 or args[0] not in {"all", "failed", "files"}:
+        app._write_local("usage: /operations all|failed|files")
+    else:
+        state.operation_filter = args[0]
+        app.screen_stack[0].query_one("#operations-console").display = True
+        app._render_operations()
+
+
 def _quit(app: CyberdeckApp, _args: list[str], _command: str) -> None:
-    app.exit()
+    app.action_quit()
 
 
 async def _run_module_command(app: CyberdeckApp, command: str, args: list[str]) -> None:
@@ -440,6 +497,13 @@ HANDLERS_BY_KEY: dict[str, CommandHandler] = {
         _approval,
         _control,
         _queue,
+        _results,
+        _recent,
+        _sessions,
+        _preferences,
+        _search,
+        _follow,
+        _operations,
         _quit,
     )
 }

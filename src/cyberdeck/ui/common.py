@@ -91,7 +91,7 @@ class HelpScreen(ModalScreen[None]):
                 "",
                 "Ctrl+N new   Ctrl+R restore   Ctrl+G control   Ctrl+P switch",
                 "Ctrl+B dispatch   F6 next module   Ctrl+L prompt / command palette",
-                "Ctrl+S save editor   Ctrl+O operations",
+                "Ctrl+S save editor   Ctrl+O operations   Ctrl+F search   F8 follow output",
                 "Ctrl+J prompt newline   Ctrl+Up/Down switch uplink",
                 "Esc close window   Ctrl+Q quit",
             ]
@@ -122,7 +122,8 @@ class AboutScreen(ModalScreen[None]):
     def compose(self) -> ComposeResult:
         with Vertical(id="about-dialog"):
             yield Label("SYSTEM MANIFEST // システム情報", id="about-title")
-            yield Static(self.manifest, id="about-content")
+            with VerticalScroll(id="about-scroll"):
+                yield Static(self.manifest, id="about-content", markup=False)
             yield Static("C  COPY DIAGNOSTICS     ESC  RETURN", classes="modal-help")
 
     def action_copy(self) -> None:

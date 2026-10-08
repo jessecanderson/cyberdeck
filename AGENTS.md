@@ -7,7 +7,8 @@ priority when they conflict with this file.
 ## Product intent
 
 Cyberdeck is a keyboard-first Textual TUI for operating multiple local coding agents.
-It currently supports Codex through App Server and Kiro through ACP over local stdio.
+It supports Codex through App Server, Kiro through ACP over local stdio, and
+Claude through the bundled Python Agent SDK (Anthropic, Bedrock, or Vertex).
 Preserve the restrained ODS visual language, but prefer legibility, deterministic
 behavior, and recoverability over decorative effects.
 
@@ -46,7 +47,7 @@ accepts something similar.
   application or manager internals.
 - Prefer explicit typed boundaries, small functions, and dependency injection over
   tests that mutate private dictionaries or callbacks.
-- Preserve compatibility exports during the 0.3 release line unless a task explicitly
+- Preserve compatibility exports during the 0.4 release line unless a task explicitly
   authorizes a breaking change.
 
 When adding a cross-cutting feature, first decide which existing owner should contain

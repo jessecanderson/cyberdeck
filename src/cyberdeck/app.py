@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import getpass
 import platform
 import shutil
@@ -9,7 +8,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from contextvars import ContextVar
-from datetime import date, datetime
+from datetime import datetime
 from importlib.metadata import version as package_version
 from pathlib import Path
 from typing import ClassVar
@@ -21,7 +20,7 @@ from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.widget import Widget
-from textual.widgets import Input, Label, ListItem, ListView, Static, TextArea
+from textual.widgets import Label, ListItem, ListView, Static
 
 from . import __version__
 from .builtin_modules import (
@@ -56,10 +55,14 @@ from .modules import (
     validate_manifest,
 )
 from .providers import AgentEvent
-from .runtimes import RuntimeRegistry
+from .runtimes import RuntimeRegistry, capability_summary
+from .session_store import SessionStore
 from .themes import DeckTheme, discover_themes, import_theme
 from .ui.boot import BootScreen
 from .ui.command_palette import CommandPalette
+from .ui.conversation import ConversationView, OperationsView
+from .ui.journal import JournalActions
+from .ui.module_lifecycle import ModuleLifecycle
 from .ui.prompt import PromptEditor
 from .ui.screens import (
     AboutScreen,
@@ -77,6 +80,7 @@ from .ui.screens import (
     TranscriptSelection,
     ice_level,
 )
+from .ui.workflow_actions import WorkflowActions
 
 __all__ = [
     "AboutScreen",
@@ -87,9 +91,11 @@ __all__ = [
     "CyberdeckApp",
     "DispatchScreen",
     "EmptyGrid",
+    "ModuleContext",
     "OperativeControl",
     "RestoreScreen",
     "SpawnAgent",
+    "TerminalMessage",
     "ice_level",
     "main",
 ]
@@ -98,7 +104,7 @@ __all__ = [
 _PROMPT_TARGET: ContextVar[AgentState | None] = ContextVar("prompt_target")
 
 
-class CyberdeckApp(App[None]):
+class CyberdeckApp(JournalActions, ModuleLifecycle, WorkflowActions, App[None]):
     CSS_PATH = "cyberdeck.tcss"
     TITLE = "CYBERDECK"
     BINDINGS: ClassVar = [
@@ -114,6 +120,8 @@ class CyberdeckApp(App[None]):
         Binding("ctrl+e", "select_transcript", "Select", priority=True),
         Binding("f6", "next_module", "Module", priority=True),
         Binding("f7", "toggle_density", "Density", priority=True),
+        Binding("f8", "follow_output", "Follow", priority=True),
+        Binding("ctrl+f", "search_transcript", "Search", priority=True),
         Binding("ctrl+l", "focus_command", "Command", priority=True),
         Binding("ctrl+u", "clear_prompt", "Clear input", show=False, priority=True),
         Binding("ctrl+s", "save_module", "Save", priority=True),
@@ -132,6 +140,12 @@ class CyberdeckApp(App[None]):
         "disable": "disable an external module",
         "remove": "remove an external module and its environment",
     }
+
+    # Textual collects decorated event handlers from the concrete MessagePump class.
+    journal_changed = JournalActions.journal_changed
+    journal_search_changed = JournalActions.journal_search_changed
+    journal_day_highlighted = JournalActions.journal_day_highlighted
+    journal_day_selected = JournalActions.journal_day_selected
 
     @property
     def clipboard(self) -> str:
@@ -201,6 +215,10 @@ class CyberdeckApp(App[None]):
         self.clipboard_service = ClipboardService(clipboard_writer)
         self.module_registry.apply_pending_updates()
         self._initialize_themes()
+        self.session_store = SessionStore(self.config_store.path.with_suffix(".state.json"))
+        if not self.deck_config.remember_sessions:
+            self.session_store.sessions.clear()
+        self.manager.dispatch_runs.extend(self.session_store.dispatches)
         self._initialize_application_state()
         self._initialize_modules()
 
@@ -218,6 +236,7 @@ class CyberdeckApp(App[None]):
         self.theme = selected_theme
 
     def _initialize_application_state(self) -> None:
+        self._metadata_reset = False
         self._system_transcript: list[TranscriptEntry] = []
         self._prompt_completions: list[tuple[str, str]] = []
         self._completion_index = 0
@@ -232,6 +251,7 @@ class CyberdeckApp(App[None]):
         self._journal_loading = False
         self._journal_dirty = False
         self._journal_loaded_text = ""
+        self._journal_pending_text = ""
         self._journal_initialized = False
         self._journal_save_timer = None
 
@@ -335,16 +355,24 @@ class CyberdeckApp(App[None]):
         )
         for error in self._theme_errors:
             self.notify(error, title="THEME REJECTED", severity="warning")
-        for error in self.config_store.errors:
+        for error in [*self.config_store.errors, *self.session_store.errors]:
             self.notify(error, title="CONFIGURATION FALLBACK", severity="warning")
         for module_id, error in self._module_errors.items():
             self.notify(error, title=f"MODULE FAULT // {module_id.upper()}", severity="error")
         if not self.skip_boot and self.deck_config.show_boot:
             self.push_screen(BootScreen())
 
+    def action_quit(self) -> None:
+        if self._save_journal():
+            self.exit()
+
     async def on_unmount(self) -> None:
         if self._journal_dirty:
             self._save_journal()
+        if not self._metadata_reset:
+            for state in self.manager.agents:
+                self.session_store.remember(state, sessions=self.deck_config.remember_sessions)
+        self._save_metadata()
         await self.manager.shutdown()
         if self._ephemeral_root:
             self._ephemeral_root.cleanup()
@@ -354,13 +382,20 @@ class CyberdeckApp(App[None]):
         if not self.screen_stack:
             return super().check_action(action, parameters)
         main = self.screen_stack[0]
-        if self.screen is main and action in {
+        if action in {"prompt_previous", "prompt_next"} and isinstance(
+            self.screen,
+            (AgentSwitcher, RestoreScreen, OperativeControl, DispatchScreen, CommandPalette),
+        ):
+            return True
+        if action in {
             "prompt_previous",
             "prompt_next",
             "complete_prompt",
             "clear_prompt",
         }:
-            return main.query_one("#prompt", PromptEditor).has_focus
+            return self.screen is main and main.query_one("#prompt", PromptEditor).has_focus
+        if action in {"next_agent", "previous_agent"}:
+            return self.screen is main
         if action == "focus_command":
             return self.screen is main
         if action == "workspace_focus":
@@ -370,7 +405,7 @@ class CyberdeckApp(App[None]):
                 is ModuleInputMode.WORKSPACE_EDITOR
                 and main.query_one("#prompt", PromptEditor).has_focus
             )
-        if action == "save_module":
+        if action in {"save_module", "follow_output", "search_transcript"}:
             return self.screen is main
         return super().check_action(action, parameters)
 
@@ -502,6 +537,7 @@ class CyberdeckApp(App[None]):
                 self.manager.runtime_preflights(),
                 self.deck_config.default_runtime,
                 catalog_loader=self.manager.native_agents,
+                workspace=self.deck_config.workspace_root,
             ),
             self._spawn_result,
         )
@@ -527,8 +563,10 @@ class CyberdeckApp(App[None]):
             self._write_local(str(exc))
             return
         await self._add_agent_item(state, select=True)
+        self._remember_agent(state)
         try:
             await self.manager.connect(state)
+            self._remember_agent(state)
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"uplink failed for {name}: {exc}")
         self._refresh_all()
@@ -679,21 +717,6 @@ class CyberdeckApp(App[None]):
             )
         self._refresh_all()
 
-    async def _handle_journal_prompt(self, prompt: str) -> None:
-        try:
-            updated = self.journal_store.append_quick_entry(self._journal_day, prompt)
-        except OSError as exc:
-            self.notify(str(exc), title="JOURNAL WRITE FAILED", severity="error")
-            return
-        self._journal_loading = True
-        self.screen_stack[0].query_one("#journal-editor", TextArea).load_text(updated)
-        self._journal_loading = False
-        self._journal_dirty = False
-        self._journal_loaded_text = updated
-        query = self.screen_stack[0].query_one("#journal-search", Input).value
-        self._refresh_journal_days(query)
-        self.notify("Quick entry recorded", title="JOURNAL")
-
     @on(PromptEditor.Changed, "#prompt")
     def prompt_changed(self, event: PromptEditor.Changed) -> None:
         self._prompt_completions = self._complete(event.text_area.text)
@@ -783,9 +806,11 @@ class CyberdeckApp(App[None]):
         if (
             state
             and event.list_view.index is not None
-            and event.list_view.index < len(state.operations)
+            and event.list_view.index < len(event.list_view.shown_operations)
         ):
-            self.push_screen(OperationDetail(state.operations[event.list_view.index]))
+            self.push_screen(
+                OperationDetail(event.list_view.shown_operations[event.list_view.index])
+            )
 
     def action_operations(self) -> None:
         if self.active_module_id != "agents":
@@ -866,212 +891,6 @@ class CyberdeckApp(App[None]):
             self.screen_stack[0].query_one("#prompt", PromptEditor).focus()
         elif module.focus_target:
             self.screen_stack[0].query_one(module.focus_target).focus()
-
-    def _activate_module(self, module_id: str) -> None:
-        if module_id not in self.deck_modules:
-            self.notify(f"Unknown module: {module_id}", severity="error")
-            return
-        self.run_worker(self._switch_module(module_id), group="module-switch", exclusive=True)
-
-    async def _switch_module(self, module_id: str) -> None:
-        main = self.screen_stack[0]
-        previous = self.active_module_id
-        if previous != module_id:
-            await self.deck_modules[previous].deactivate()
-        self.active_module_id = module_id
-        for candidate, widget in self.module_widgets.items():
-            widget.display = candidate == module_id
-        ordered = self._ordered_module_ids()
-        main.query_one("#modules", ListView).index = next(
-            index for index, candidate in enumerate(ordered) if candidate == module_id
-        )
-        self._refresh_module_labels()
-        prompt = main.query_one("#prompt", PromptEditor)
-        if module_id == "agents":
-            prompt.placeholder = "jack in... type a command or message"
-            self._render_active()
-        elif module_id == "journal":
-            prompt.placeholder = "quick journal entry... or /command"
-            main.query_one("#prompt-prefix", Static).update("local@journal:today $")
-        else:
-            prompt.placeholder = "module input... or /command"
-            main.query_one("#prompt-prefix", Static).update(f"local@{module_id}:~ $")
-        await self.deck_modules[module_id].activate()
-        self.deck_config.active_module = module_id
-        if self._persist_preferences:
-            try:
-                self.config_store.save(self.deck_config)
-            except OSError as exc:
-                self.notify(str(exc), title="CONFIG WRITE FAILED", severity="warning")
-        self._focus_active_workspace()
-
-    def _refresh_module_labels(self) -> None:
-        view = self.screen_stack[0].query_one("#modules", ListView)
-        ordered = self._ordered_module_ids()
-        for item, module_id in zip(view.children, ordered, strict=False):
-            labels = list(item.query(Label))
-            if labels:
-                labels[0].update(self._module_label_id(module_id))
-
-    def _module_label(self, module: DeckModule) -> Text:
-        return self._module_label_id(module.manifest.id)
-
-    def _module_label_id(self, module_id: str) -> Text:
-        module = self.deck_modules.get(module_id)
-        record = self.module_registry.records.get(module_id)
-        active = module_id == self.active_module_id
-        title = module.manifest.title if module else module_id.upper()
-        description = module.manifest.description if module else (record.error or record.package)
-        status = (
-            "ACTIVE"
-            if active
-            else "FAULT"
-            if record and record.status == ModuleStatus.FAULTED.value
-            else "UPDATE"
-            if record and record.pending_environment
-            else "DISABLED"
-            if record and not record.enabled
-            else "STANDBY"
-        )
-        label = Text()
-        label.append("● " if active else "◇ ", style="bold #52e891" if active else "#607087")
-        label.append(title, style="bold #00e8f2" if active else "#8ba2b3")
-        label.append(f"  {status}", style="bold #52e891" if active else "#607087")
-        label.append(f"\n  {description}", style="#46566c")
-        return label
-
-    @staticmethod
-    def _module_widget_id(module_id: str) -> str:
-        return "agent-module" if module_id == "agents" else f"{module_id}-module"
-
-    def _ordered_enabled_module_ids(self) -> list[str]:
-        return sorted(
-            self.deck_modules,
-            key=lambda key: (self.deck_modules[key].manifest.order, key),
-        )
-
-    def _ordered_module_ids(self) -> list[str]:
-        ids = set(self.deck_modules) | set(self.module_registry.records)
-        return sorted(
-            ids,
-            key=lambda key: (
-                self.deck_modules[key].manifest.order if key in self.deck_modules else 100,
-                key,
-            ),
-        )
-
-    def _module_context(self, module_id: str) -> ModuleContext:
-        return ModuleContext(
-            module_id=module_id,
-            data_directory=self.module_registry.root / "data" / module_id,
-            config_directory=self.module_registry.config_root / module_id,
-            notify=lambda message, title="MODULE", severity="information": self.notify(
-                message, title=title, severity=severity
-            ),
-            copy_to_clipboard=self._copy_text,
-            services={},
-        )
-
-    async def _activate_journal(self) -> None:
-        main = self.screen_stack[0]
-        query = main.query_one("#journal-search", Input).value
-        self._refresh_journal_days(query)
-        if not self._journal_initialized:
-            self._load_journal_day(self._journal_day)
-
-    async def _deactivate_journal(self) -> None:
-        if self._journal_dirty:
-            self._save_journal()
-
-    def _refresh_journal_days(self, query: str = "") -> None:
-        days = self.journal_store.days(query)
-        today = datetime.now().astimezone().date()
-        if not query and today not in days:
-            days.insert(0, today)
-        self._journal_dates = days
-        view = self.screen_stack[0].query_one("#journal-days", ListView)
-        view.clear()
-        for day in days:
-            marker = "●" if day == self._journal_day else "○"
-            view.append(ListItem(Label(f"{marker} {day.isoformat()}\n  {day:%A}")))
-        if days:
-            try:
-                view.index = days.index(self._journal_day)
-            except ValueError:
-                view.index = 0
-
-    def _load_journal_day(self, day: date) -> None:
-        if self._journal_dirty:
-            self._save_journal()
-        self._journal_day = day
-        try:
-            content = self.journal_store.read(day)
-        except OSError as exc:
-            self.notify(str(exc), title="JOURNAL READ FAILED", severity="error")
-            return
-        self._journal_loading = True
-        main = self.screen_stack[0]
-        main.query_one("#journal-editor", TextArea).load_text(content)
-        self._journal_loading = False
-        self._journal_dirty = False
-        self._journal_loaded_text = content
-        self._journal_initialized = True
-        main.query_one("#journal-date", Static).update(
-            f"{day:%A, %B} {day.day}, {day.year} // {day.isoformat()}"
-        )
-        if self.active_module_id == "journal":
-            main.query_one("#prompt-prefix", Static).update(f"local@journal:{day.isoformat()} $")
-
-    def _save_journal(self) -> bool:
-        if not self._journal_dirty:
-            return True
-        main = self.screen_stack[0]
-        text = main.query_one("#journal-editor", TextArea).text
-        try:
-            self.journal_store.write(self._journal_day, text)
-        except OSError as exc:
-            self.notify(str(exc), title="JOURNAL WRITE FAILED", severity="error")
-            return False
-        self._journal_dirty = False
-        self._journal_loaded_text = text
-        main.query_one("#journal-status", Static).update("SAVED // USER OWNED MARKDOWN")
-        query = main.query_one("#journal-search", Input).value
-        self._refresh_journal_days(query)
-        return True
-
-    async def _save_journal_module(self) -> bool:
-        saved = self._save_journal()
-        if saved:
-            self.notify("Entry saved", title="JOURNAL")
-        return saved
-
-    @on(TextArea.Changed, "#journal-editor")
-    def journal_changed(self) -> None:
-        editor = self.screen_stack[0].query_one("#journal-editor", TextArea)
-        if self._journal_loading or editor.text == self._journal_loaded_text:
-            return
-        self._journal_dirty = True
-        self.screen_stack[0].query_one("#journal-status", Static).update(
-            "MODIFIED // AUTOSAVE ARMED"
-        )
-        if self._journal_save_timer is not None:
-            self._journal_save_timer.stop()
-        self._journal_save_timer = self.set_timer(0.7, self._save_journal)
-
-    @on(Input.Changed, "#journal-search")
-    def journal_search_changed(self, event: Input.Changed) -> None:
-        self._refresh_journal_days(event.value)
-
-    @on(ListView.Highlighted, "#journal-days")
-    def journal_day_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.list_view.index is not None and event.list_view.index < len(self._journal_dates):
-            day = self._journal_dates[event.list_view.index]
-            if day != self._journal_day:
-                self._load_journal_day(day)
-
-    @on(ListView.Selected, "#journal-days")
-    def journal_day_selected(self) -> None:
-        self.screen_stack[0].query_one("#journal-editor", TextArea).focus()
 
     def action_prompt_previous(self) -> None:
         if self._navigate_non_prompt(-1):
@@ -1212,6 +1031,7 @@ class CyberdeckApp(App[None]):
             self._write_local("DISPATCH SUMMARY\n" + "\n".join(rows))
         except Exception as exc:  # noqa: BLE001
             self._write_local(f"dispatch blocked: {exc}")
+        self._save_metadata()
         self._refresh_all()
 
     def _control_result(self, state: AgentState, result) -> None:
@@ -1241,6 +1061,11 @@ class CyberdeckApp(App[None]):
         try:
             operation = getattr(self.manager, action)
             await operation(state, argument) if action == "rename" else await operation(state)
+            if action == "archive":
+                self.session_store.forget(state)
+            else:
+                self.session_store.remember(state, sessions=self.deck_config.remember_sessions)
+            self._save_metadata()
             if action in {"disconnect", "archive"}:
                 await self._sync_agent_list()
             signal = {
@@ -1292,18 +1117,10 @@ class CyberdeckApp(App[None]):
     def _render_active(self, *, follow_end: bool = True) -> None:
         main = self.screen_stack[0]
         state = self._active_agent()
-        conversation = main.query_one("#conversation", VerticalScroll)
-        conversation.remove_children()
+        conversation = main.query_one("#conversation", ConversationView)
+        position = conversation.reading_position(state)
         entries = state.transcript if state else self._system_transcript
-        if not state and not entries:
-            conversation.mount(EmptyGrid())
-        if state and state.history_cursor:
-            conversation.mount(Static("↑ LOAD OLDER TURNS  //  /older", classes="load-older"))
-        for entry in entries:
-            conversation.mount(TerminalMessage(entry, state))
-        if state:
-            for approval in state.pending_approvals:
-                conversation.mount(ApprovalMessage(state, approval))
+        conversation.show_entries(state, entries)
         prefix = main.query_one("#prompt-prefix", Static)
         prefix.update(
             f"{getpass.getuser()}@{state.config.name}:{self.display_path(state.config.working_directory)} $"
@@ -1312,39 +1129,19 @@ class CyberdeckApp(App[None]):
         )
         self._render_operations()
         self._update_rails()
-        if follow_end:
-            self.call_after_refresh(lambda: conversation.scroll_end(animate=False))
+        if follow_end and state and state.pending_approvals:
+            self.call_after_refresh(lambda: self._restore_ice_input(state))
+        elif follow_end and (state is None or state.follow_output):
+            self.call_after_refresh(lambda: conversation.scroll_end(animate=False, immediate=True))
+        elif follow_end and state and not state.follow_output:
+            self.call_after_refresh(
+                lambda: conversation.scroll_to(y=position, animate=False, immediate=True)
+            )
 
     def _render_operations(self) -> None:
-        view = self.screen_stack[0].query_one("#operations-list", ListView)
-        view.clear()
+        view = self.screen_stack[0].query_one("#operations-list", OperationsView)
         state = self._active_agent()
-        if not state:
-            return
-        for op in state.operations:
-            glyph = {
-                "succeeded": "✓",
-                "failed": "!",
-                "approval": "?",
-                "running": "◐",
-                "pending": "○",
-            }[op.state.value]
-            trace = self._trace_class(op)
-            phase = {
-                "succeeded": "CLEAR",
-                "failed": "FAULT",
-                "approval": "INTERLOCK",
-                "running": "ACTIVE",
-                "pending": "QUEUED",
-            }[op.state.value]
-            view.append(
-                ListItem(
-                    Label(
-                        f"{op.created_at:%H:%M:%S}  {trace:<7} {phase:<9} {glyph} "
-                        f"{op.kind:<16} {op.summary}"
-                    )
-                )
-            )
+        view.show_operations(state, state.operation_filter if state else "all")
 
     @staticmethod
     def _trace_class(operation: OperationEntry) -> str:
@@ -1381,167 +1178,6 @@ class CyberdeckApp(App[None]):
                 commands[command.name] = command.description
         return commands
 
-    def _module_state(self, module_id: str) -> str:
-        if module_id == self.active_module_id:
-            return "active"
-        record = self.module_registry.records.get(module_id)
-        if record:
-            return record.status
-        return "bundled"
-
-    def _module_description(self, module_id: str) -> str:
-        module = self.deck_modules.get(module_id)
-        if module:
-            return module.manifest.description
-        record = self.module_registry.records[module_id]
-        return record.error or record.package
-
-    def _module_management_command(self, action: str, module_id: str) -> None:
-        if module_id not in self.module_registry.records:
-            self.notify(f"External module not found: {module_id}", severity="error")
-            return
-        if action == "info":
-            record = self.module_registry.records[module_id]
-            self.notify(
-                f"PACKAGE  {record.package}\nVERSION  {record.version}\n"
-                f"SOURCE   {record.source}\nSTATE    {record.status}\n"
-                f"ERROR    {record.error or '--'}",
-                title=f"MODULE // {module_id.upper()}",
-            )
-        elif action == "enable":
-            self.run_worker(self._enable_external_module(module_id), exclusive=False)
-        elif action == "disable":
-            self.run_worker(self._disable_external_module(module_id), exclusive=False)
-        elif action == "remove":
-            self.push_screen(
-                ConfirmScreen("REMOVE MODULE", f"Remove {module_id} and its environment?"),
-                lambda confirmed: (
-                    self.run_worker(self._remove_external_module(module_id), exclusive=False)
-                    if confirmed
-                    else None
-                ),
-            )
-        elif action == "update":
-            record = self.module_registry.records[module_id]
-            self._install_external_module(record.source)
-
-    @work(exclusive=False)
-    async def _install_external_module(self, specification: str, *, editable: bool = False) -> None:
-        self.notify("Resolving package and dependencies", title="MODULE INSTALL")
-        record = None
-        try:
-            record, module = await asyncio.to_thread(
-                self.module_registry.install,
-                specification,
-                self._module_context,
-                editable=editable,
-                trusted=True,
-            )
-            if module:
-                await self._mount_external_module(module)
-                self.notify(
-                    f"{record.id} {record.version} mounted and ready",
-                    title="MODULE INSTALLED",
-                )
-            else:
-                self.notify(
-                    f"{record.id} update staged for next launch",
-                    title="UPDATE PENDING",
-                )
-            await self._sync_module_list()
-        except Exception as exc:  # noqa: BLE001
-            if (
-                record
-                and record.id in self.module_registry.records
-                and not record.pending_environment
-            ):
-                record.enabled = False
-                record.status = ModuleStatus.FAULTED.value
-                record.error = str(exc)
-                self.module_registry.save()
-                await self._sync_module_list()
-            self.notify(str(exc), title="MODULE INSTALL FAILED", severity="error")
-
-    async def _mount_external_module(self, module: DeckModule) -> None:
-        module_id = module.manifest.id
-        if module_id in self.deck_modules:
-            raise ValueError(f"Module id already loaded: {module_id}")
-        registered = {
-            name
-            for item in self.deck_modules.values()
-            for name in (c.name for c in item.commands())
-        }
-        registered.update(self.LOCAL_COMMANDS)
-        conflicts = sorted(
-            command.name for command in module.commands() if command.name in registered
-        )
-        if conflicts:
-            raise ValueError(f"Module command collision: {', '.join(conflicts)}")
-        widget = module.build()
-        widget.id = self._module_widget_id(module_id)
-        widget.add_class("deck-module")
-        widget.display = False
-        await (
-            self.screen_stack[0]
-            .query_one("#main-panel")
-            .mount(widget, before=self.screen_stack[0].query_one("#autocomplete"))
-        )
-        self.deck_modules[module_id] = module
-        self.module_widgets[module_id] = widget
-        await self._sync_module_list()
-        await self._switch_module(module_id)
-
-    async def _enable_external_module(self, module_id: str) -> None:
-        if module_id in self.deck_modules:
-            self.notify(f"{module_id} is already enabled")
-            return
-        try:
-            module = await asyncio.to_thread(
-                self.module_registry.load_record, module_id, self._module_context
-            )
-            await self._mount_external_module(module)
-            self.notify(f"{module_id} enabled", title="MODULE ONLINE")
-        except Exception as exc:  # noqa: BLE001
-            record = self.module_registry.records[module_id]
-            record.status = ModuleStatus.FAULTED.value
-            record.error = str(exc)
-            self.module_registry.save()
-            await self._sync_module_list()
-            self.notify(str(exc), title="MODULE FAULT", severity="error")
-
-    async def _disable_external_module(self, module_id: str) -> None:
-        if self.active_module_id == module_id:
-            await self._switch_module("agents")
-        module = self.deck_modules.pop(module_id, None)
-        widget = self.module_widgets.pop(module_id, None)
-        if module:
-            try:
-                await asyncio.wait_for(module.deactivate(), timeout=2)
-            except Exception as exc:  # noqa: BLE001
-                self.notify(str(exc), title="MODULE DEACTIVATION FAULT", severity="warning")
-        if widget:
-            await widget.remove()
-        self.module_registry.set_enabled(module_id, False)
-        await self._sync_module_list()
-        self.notify(f"{module_id} disabled", title="MODULE OFFLINE")
-
-    async def _remove_external_module(self, module_id: str) -> None:
-        if module_id in self.deck_modules:
-            await self._disable_external_module(module_id)
-        await asyncio.to_thread(self.module_registry.remove, module_id)
-        await self._sync_module_list()
-        self.notify(f"{module_id} removed", title="MODULE REMOVED")
-
-    async def _sync_module_list(self) -> None:
-        view = self.screen_stack[0].query_one("#modules", ListView)
-        selected = self.active_module_id
-        view.clear()
-        ordered = self._ordered_module_ids()
-        for module_id in ordered:
-            await view.append(ListItem(Label(self._module_label_id(module_id))))
-        if selected in ordered:
-            view.index = ordered.index(selected)
-
     def _system_manifest(self) -> str:
         codex_version = self._executable_version("codex")
         external_records = list(self.module_registry.records.values())
@@ -1573,6 +1209,14 @@ class CyberdeckApp(App[None]):
             "",
             "No prompts, transcripts, environment variables, or credentials included.",
         ]
+        rows.extend(["", "RUNTIME COMPATIBILITY"])
+        for runtime in self.manager.runtime_preflights():
+            rows.append(
+                f"{runtime.runtime_id}: {'available' if runtime.available else 'unavailable'}"
+                f" // {runtime.version or 'version unknown'}"
+            )
+        for state in self.manager.agents:
+            rows.append(f"{state.config.provider}: {capability_summary(state.capabilities)}")
         return "\n".join(rows)
 
     @staticmethod
@@ -1592,27 +1236,6 @@ class CyberdeckApp(App[None]):
             return "DETECTED // VERSION UNAVAILABLE"
         output = (result.stdout or result.stderr).strip().splitlines()
         return output[0] if output else "DETECTED // VERSION UNAVAILABLE"
-
-    async def _command_journal(self, args: list[str]) -> None:
-        day = datetime.now().astimezone().date()
-        if args:
-            try:
-                day = date.fromisoformat(args[0])
-            except ValueError:
-                self.notify("usage: /journal [YYYY-MM-DD]", severity="error")
-                return
-        self._journal_day = day
-        self._activate_module("journal")
-        self._load_journal_day(day)
-
-    async def _command_today(self, _args: list[str]) -> None:
-        await self._command_journal([])
-
-    async def _command_save(self, _args: list[str]) -> None:
-        if self.active_module_id != "journal":
-            self.notify("Journal is not active", severity="warning")
-            return
-        await self._save_journal_module()
 
     def _theme_command(self, args: list[str]) -> None:
         if not args:
@@ -1885,6 +1508,12 @@ class CyberdeckApp(App[None]):
         self._refresh_all()
 
     def _agent_event(self, state: AgentState, event: AgentEvent) -> None:
+        if (
+            event.kind in {"dispatch_updated", "user_submitted"}
+            or event.kind in {"error", "transport_closed"}
+            or (event.kind == "status" and event.text == "ready")
+        ):
+            self._remember_agent(state)
         self._track_unread(state, event)
         self._show_event_transition(state, event)
         if self._render_priority_event(state, event):
@@ -1941,16 +1570,8 @@ class CyberdeckApp(App[None]):
             self.call_after_refresh(lambda: self._restore_ice_input(state))
             return True
         if event.kind == "assistant_delta" and state is self._active_agent():
-            conversation = self.screen_stack[0].query_one("#conversation", VerticalScroll)
-            messages = list(conversation.query(TerminalMessage))
-            expected = len(state.transcript)
-            if len(messages) < expected:
-                conversation.mount(TerminalMessage(state.transcript[-1], state))
-            elif messages:
-                messages[-1].refresh(layout=True)
+            self._render_active()
             self._refresh_agent_label(state)
-            self._update_rails()
-            self.call_after_refresh(lambda: conversation.scroll_end(animate=False))
             return True
         return False
 
@@ -1958,11 +1579,9 @@ class CyberdeckApp(App[None]):
         approvals = list(self.screen_stack[0].query(ApprovalMessage))
         if approvals:
             approval = approvals[-1]
-            approval.scroll_visible(
-                animate=False,
-                top=True,
-                force=True,
-                immediate=True,
+            conversation = self.screen_stack[0].query_one("#conversation", ConversationView)
+            conversation.scroll_to(
+                y=approval.virtual_region.y, animate=False, force=True, immediate=True
             )
 
     def _restore_ice_input(self, state: AgentState) -> None:
